@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/diceman",
+    "crates/diceman-py",
+    "crates/diceman-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Jerry Snitselaar"]
+repository = "https://github.com/jsnitsel/diceman"
+
+[workspace.dependencies]
+diceman = { path = "crates/diceman" }
+fastrand = "2"
+thiserror = "2"
+pyo3 = { version = "0.23", features = ["extension-module"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,0 +1,15 @@
+[package]
+name = "diceman"
+description = "A dice notation parser and roller for TTRPGs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+fastrand.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"
