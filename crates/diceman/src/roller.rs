@@ -478,4 +478,30 @@ mod tests {
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 0);
     }
+
+    #[test]
+    fn test_evaluate_drop_lowest() {
+        let roll = Roll {
+            count: 4,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::DropLowest(1)],
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 1, keep 5+3+6 = 14
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 14);
+    }
+
+    #[test]
+    fn test_evaluate_drop_highest() {
+        let roll = Roll {
+            count: 4,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::DropHighest(1)],
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 6, keep 1+5+3 = 9
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 9);
+    }
 }
