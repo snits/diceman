@@ -191,10 +191,16 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     modifiers.push(self.reroll_modifier()?);
                 }
-                // 'd' at the start could be drop, but we need to check if it's followed by 'h' or 'l'
-                // Actually in Roll20 notation, drop is 'd' followed by 'l' or 'h' and a number
-                // But 'd' is also the dice separator, so we need context
-                // For simplicity, we'll use 'dl' and 'dh' patterns
+                Token::D => {
+                    // In modifier context, 'd' followed by 'h' or 'l' is a drop modifier
+                    let next = self.lexer.peek()?;
+                    if matches!(next, Token::H | Token::L) {
+                        self.advance()?;
+                        modifiers.push(self.drop_modifier()?);
+                    } else {
+                        break;
+                    }
+                }
                 _ => break,
             }
         }
@@ -222,6 +228,34 @@ impl<'a> Parser<'a> {
             Ok(Modifier::KeepHighest(count))
         } else {
             Ok(Modifier::KeepLowest(count))
+        }
+    }
+
+    /// Parse a drop modifier (dh3, dl1).
+    fn drop_modifier(&mut self) -> Result<Modifier> {
+        let high = match self.current {
+            Token::H => {
+                self.advance()?;
+                true
+            }
+            Token::L => {
+                self.advance()?;
+                false
+            }
+            _ => {
+                return Err(Error::Expected {
+                    expected: "'h' or 'l' after 'd'".to_string(),
+                    found: format!("{:?}", self.current),
+                });
+            }
+        };
+
+        let count = self.optional_number(1)?;
+
+        if high {
+            Ok(Modifier::DropHighest(count))
+        } else {
+            Ok(Modifier::DropLowest(count))
         }
     }
 
@@ -439,5 +473,31 @@ mod tests {
             }
             _ => panic!("Expected BinOp"),
         }
+    }
+
+    #[test]
+    fn test_parse_drop_lowest() {
+        let expr = parse("4d6dl1").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 4,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::DropLowest(1)],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_drop_highest() {
+        let expr = parse("2d20dh1").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 2,
+                sides: Sides::Number(20),
+                modifiers: vec![Modifier::DropHighest(1)],
+            })
+        );
     }
 }
