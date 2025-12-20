@@ -98,6 +98,8 @@ pub enum Modifier {
         /// The condition for reroll (defaults to 1).
         condition: Option<Condition>,
     },
+    /// Count successes: count dice matching condition instead of summing.
+    CountSuccesses(Condition),
 }
 
 /// A comparison condition for explode/reroll.
