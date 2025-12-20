@@ -138,7 +138,8 @@ impl<R: Rng> Evaluator<'_, R> {
             })
             .collect();
 
-        // Apply modifiers in order: reroll -> explode -> keep/drop
+        // Apply modifiers in order: reroll -> explode -> keep/drop -> count
+        let mut success_condition: Option<&Condition> = None;
         for modifier in &roll.modifiers {
             match modifier {
                 Modifier::Reroll { once, condition } => {
@@ -151,14 +152,24 @@ impl<R: Rng> Evaluator<'_, R> {
                 Modifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
                 Modifier::DropHighest(n) => self.apply_drop_highest(&mut dice, *n),
                 Modifier::DropLowest(n) => self.apply_drop_lowest(&mut dice, *n),
+                Modifier::CountSuccesses(condition) => {
+                    success_condition = Some(condition);
+                }
             }
         }
 
-        // Calculate total (only non-dropped dice)
-        let total: i64 = dice.iter().filter(|d| !d.dropped).map(|d| d.value).sum();
+        // Calculate total: count successes or sum values
+        let total: i64 = if let Some(condition) = success_condition {
+            dice.iter()
+                .filter(|d| !d.dropped)
+                .filter(|d| condition.compare.check(d.value, condition.value))
+                .count() as i64
+        } else {
+            dice.iter().filter(|d| !d.dropped).map(|d| d.value).sum()
+        };
 
         // Format the expression
-        let expression = self.format_roll(roll, &dice, total);
+        let expression = self.format_roll(roll, &dice, total, success_condition);
 
         Ok(RollResult {
             total,
@@ -336,7 +347,13 @@ impl<R: Rng> Evaluator<'_, R> {
         }
     }
 
-    fn format_roll(&self, roll: &Roll, dice: &[DieResult], total: i64) -> String {
+    fn format_roll(
+        &self,
+        roll: &Roll,
+        dice: &[DieResult],
+        total: i64,
+        success_condition: Option<&Condition>,
+    ) -> String {
         let sides_str = match roll.sides {
             Sides::Number(n) => n.to_string(),
             Sides::Percent => "%".to_string(),
@@ -371,14 +388,24 @@ impl<R: Rng> Evaluator<'_, R> {
                     }
                     s
                 }
+                Modifier::CountSuccesses(c) => {
+                    format!("{}{}", c.compare, c.value)
+                }
             })
             .collect();
 
+        // Format dice, marking successes if counting
         let dice_str: String = dice
             .iter()
             .map(|d| {
                 if d.dropped {
                     format!("({})", d.value)
+                } else if let Some(condition) = success_condition {
+                    if condition.compare.check(d.value, condition.value) {
+                        format!("{}*", d.value) // Mark successes with *
+                    } else {
+                        d.value.to_string()
+                    }
                 } else {
                     d.value.to_string()
                 }
@@ -386,10 +413,18 @@ impl<R: Rng> Evaluator<'_, R> {
             .collect::<Vec<_>>()
             .join(", ");
 
-        format!(
-            "{}d{}{}[{}] = {}",
-            roll.count, sides_str, modifiers_str, dice_str, total
-        )
+        if success_condition.is_some() {
+            let success_word = if total == 1 { "success" } else { "successes" };
+            format!(
+                "{}d{}{}[{}] = {} {}",
+                roll.count, sides_str, modifiers_str, dice_str, total, success_word
+            )
+        } else {
+            format!(
+                "{}d{}{}[{}] = {}",
+                roll.count, sides_str, modifiers_str, dice_str, total
+            )
+        }
     }
 }
 
@@ -503,5 +538,55 @@ mod tests {
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 6, keep 1+5+3 = 9
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 9);
+    }
+
+    #[test]
+    fn test_evaluate_count_successes() {
+        let roll = Roll {
+            count: 5,
+            sides: Sides::Number(10),
+            modifiers: vec![Modifier::CountSuccesses(Condition {
+                compare: Compare::GreaterOrEqual,
+                value: 8,
+            })],
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]); // 10, 8, 9 >= 8 = 3 successes
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 3);
+    }
+
+    #[test]
+    fn test_evaluate_count_successes_zero() {
+        let roll = Roll {
+            count: 3,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::CountSuccesses(Condition {
+                compare: Compare::Equal,
+                value: 6,
+            })],
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1, 2, 3]); // No 6s = 0 successes
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 0);
+    }
+
+    #[test]
+    fn test_evaluate_count_successes_output_format() {
+        let roll = Roll {
+            count: 4,
+            sides: Sides::Number(10),
+            modifiers: vec![Modifier::CountSuccesses(Condition {
+                compare: Compare::GreaterOrEqual,
+                value: 8,
+            })],
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![10, 5, 8, 3]); // 10*, 5, 8*, 3 = 2 successes
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(result.expression.contains("successes"));
+        assert!(result.expression.contains("10*")); // Success marked
+        assert!(result.expression.contains("8*"));  // Success marked
     }
 }
