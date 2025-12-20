@@ -201,6 +201,11 @@ impl<'a> Parser<'a> {
                         break;
                     }
                 }
+                // Comparison operators directly after dice = success counting
+                Token::Gt | Token::Lt | Token::Eq => {
+                    let condition = self.required_condition()?;
+                    modifiers.push(Modifier::CountSuccesses(condition));
+                }
                 _ => break,
             }
         }
@@ -295,6 +300,14 @@ impl<'a> Parser<'a> {
         } else {
             Ok(default)
         }
+    }
+
+    /// Parse a required condition (>=8, <3, =5, etc.) for success counting.
+    fn required_condition(&mut self) -> Result<Condition> {
+        self.optional_condition()?.ok_or_else(|| Error::Expected {
+            expected: "comparison operator (>, <, =, >=, <=)".to_string(),
+            found: format!("{:?}", self.current),
+        })
     }
 
     /// Parse an optional condition (=5, <3, >2, etc.).
@@ -497,6 +510,54 @@ mod tests {
                 count: 2,
                 sides: Sides::Number(20),
                 modifiers: vec![Modifier::DropHighest(1)],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_success_count_gte() {
+        let expr = parse("5d10>=8").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 5,
+                sides: Sides::Number(10),
+                modifiers: vec![Modifier::CountSuccesses(Condition {
+                    compare: Compare::GreaterOrEqual,
+                    value: 8,
+                })],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_success_count_gt() {
+        let expr = parse("6d6>4").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 6,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::CountSuccesses(Condition {
+                    compare: Compare::GreaterThan,
+                    value: 4,
+                })],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_success_count_eq() {
+        let expr = parse("8d6=6").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 8,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::CountSuccesses(Condition {
+                    compare: Compare::Equal,
+                    value: 6,
+                })],
             })
         );
     }
