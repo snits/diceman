@@ -1,0 +1,17 @@
+[package]
+name = "diceman-cli"
+description = "Command-line interface for diceman dice notation library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "diceman"
+path = "src/main.rs"
+
+[dependencies]
+diceman.workspace = true
+clap.workspace = true
+serde_json.workspace = true
