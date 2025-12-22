@@ -145,8 +145,8 @@ impl<R: Rng> Evaluator<'_, R> {
                 Modifier::Reroll { once, condition } => {
                     self.apply_reroll(&mut dice, &roll.sides, *once, condition.as_ref())?;
                 }
-                Modifier::Explode { once, condition } => {
-                    self.apply_explode(&mut dice, &roll.sides, *once, condition.as_ref())?;
+                Modifier::Explode { penetrating, condition } => {
+                    self.apply_explode(&mut dice, &roll.sides, *penetrating, condition.as_ref())?;
                 }
                 Modifier::KeepHighest(n) => self.apply_keep_highest(&mut dice, *n),
                 Modifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
@@ -227,7 +227,7 @@ impl<R: Rng> Evaluator<'_, R> {
         &mut self,
         dice: &mut Vec<DieResult>,
         sides: &Sides,
-        once: bool,
+        penetrating: bool,
         condition: Option<&Condition>,
     ) -> Result<()> {
         let max_val = sides.count() as i64;
@@ -254,16 +254,14 @@ impl<R: Rng> Evaluator<'_, R> {
 
                 let new_value = self.roll_die(sides);
 
-                // Add explosion to the current die's total
-                dice[i].value += new_value;
+                // Penetrating: subtract 1 from added value (not from check)
+                let added_value = if penetrating { new_value - 1 } else { new_value };
+
+                dice[i].value += added_value;
                 dice[i].rolls.push(new_value);
 
                 current_value = new_value;
                 explode_count += 1;
-
-                if once {
-                    break;
-                }
             }
             i += 1;
         }
@@ -368,10 +366,10 @@ impl<R: Rng> Evaluator<'_, R> {
                 Modifier::KeepLowest(n) => format!("kl{}", n),
                 Modifier::DropHighest(n) => format!("dh{}", n),
                 Modifier::DropLowest(n) => format!("dl{}", n),
-                Modifier::Explode { once, condition } => {
+                Modifier::Explode { penetrating, condition } => {
                     let mut s = "!".to_string();
-                    if *once {
-                        s.push('o');
+                    if *penetrating {
+                        s.push('p');
                     }
                     if let Some(c) = condition {
                         s.push_str(&format!("{}{}", c.compare, c.value));
@@ -588,5 +586,41 @@ mod tests {
         assert!(result.expression.contains("successes"));
         assert!(result.expression.contains("10*")); // Success marked
         assert!(result.expression.contains("8*"));  // Success marked
+    }
+
+    #[test]
+    fn test_evaluate_penetrating_explode() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                penetrating: true,
+                condition: None,
+            }],
+        };
+        let expr = Expr::Roll(roll);
+        // Rolls: 6 (explode), 6 (explode), 4 (stop)
+        // Added: 6 + (6-1) + (4-1) = 6 + 5 + 3 = 14
+        let mut rng = TestRng::new(vec![6, 6, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 14);
+    }
+
+    #[test]
+    fn test_evaluate_penetrating_explode_no_explosion() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                penetrating: true,
+                condition: None,
+            }],
+        };
+        let expr = Expr::Roll(roll);
+        // Roll: 4 (no explosion)
+        // Total: 4 (no -1 because no explosion occurred)
+        let mut rng = TestRng::new(vec![4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 4);
     }
 }
