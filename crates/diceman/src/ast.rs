@@ -86,8 +86,8 @@ pub enum Modifier {
     DropLowest(u32),
     /// Explode dice matching the condition.
     Explode {
-        /// If true, only explode once per die.
-        once: bool,
+        /// If true, subtract 1 from each explosion roll's added value.
+        penetrating: bool,
         /// The condition for explosion (defaults to max value).
         condition: Option<Condition>,
     },
