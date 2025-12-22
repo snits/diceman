@@ -86,6 +86,9 @@ pub enum Modifier {
     DropLowest(u32),
     /// Explode dice matching the condition.
     Explode {
+        /// If true, add explosions to same die (compounding/Shadowrun).
+        /// If false, create new dice for each explosion (standard/Roll20).
+        compounding: bool,
         /// If true, subtract 1 from each explosion roll's added value.
         penetrating: bool,
         /// The condition for explosion (defaults to max value).
