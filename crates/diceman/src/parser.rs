@@ -264,9 +264,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an explode modifier (!, !o, !>5).
+    /// Parse an explode modifier (!, !p, !>5, !p>5).
     fn explode_modifier(&mut self) -> Result<Modifier> {
-        let once = if self.current == Token::O {
+        let penetrating = if self.current == Token::P {
             self.advance()?;
             true
         } else {
@@ -275,7 +275,7 @@ impl<'a> Parser<'a> {
 
         let condition = self.optional_condition()?;
 
-        Ok(Modifier::Explode { once, condition })
+        Ok(Modifier::Explode { penetrating, condition })
     }
 
     /// Parse a reroll modifier (r, ro, r<3).
@@ -424,7 +424,7 @@ mod tests {
                 count: 1,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::Explode {
-                    once: false,
+                    penetrating: false,
                     condition: None,
                 }],
             })
@@ -440,7 +440,42 @@ mod tests {
                 count: 1,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::Explode {
-                    once: false,
+                    penetrating: false,
+                    condition: Some(Condition {
+                        compare: Compare::GreaterThan,
+                        value: 4,
+                    }),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_penetrating_explode() {
+        let expr = parse("1d6!p").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 1,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::Explode {
+                    penetrating: true,
+                    condition: None,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_penetrating_explode_condition() {
+        let expr = parse("1d6!p>4").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 1,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::Explode {
+                    penetrating: true,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
