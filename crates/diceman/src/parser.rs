@@ -264,8 +264,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an explode modifier (!, !p, !>5, !p>5).
+    /// Parse an explode modifier (!, !!, !p, !!p, !>5, !!p>5).
     fn explode_modifier(&mut self) -> Result<Modifier> {
+        let compounding = if self.current == Token::Explode {
+            self.advance()?;
+            true
+        } else {
+            false
+        };
+
         let penetrating = if self.current == Token::P {
             self.advance()?;
             true
@@ -275,7 +282,7 @@ impl<'a> Parser<'a> {
 
         let condition = self.optional_condition()?;
 
-        Ok(Modifier::Explode { penetrating, condition })
+        Ok(Modifier::Explode { compounding, penetrating, condition })
     }
 
     /// Parse a reroll modifier (r, ro, r<3).
@@ -424,6 +431,7 @@ mod tests {
                 count: 1,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::Explode {
+                    compounding: false,
                     penetrating: false,
                     condition: None,
                 }],
@@ -440,6 +448,7 @@ mod tests {
                 count: 1,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::Explode {
+                    compounding: false,
                     penetrating: false,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
@@ -459,6 +468,7 @@ mod tests {
                 count: 1,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::Explode {
+                    compounding: false,
                     penetrating: true,
                     condition: None,
                 }],
@@ -475,6 +485,81 @@ mod tests {
                 count: 1,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::Explode {
+                    compounding: false,
+                    penetrating: true,
+                    condition: Some(Condition {
+                        compare: Compare::GreaterThan,
+                        value: 4,
+                    }),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_compounding_explode() {
+        let expr = parse("1d6!!").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 1,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::Explode {
+                    compounding: true,
+                    penetrating: false,
+                    condition: None,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_compounding_penetrating() {
+        let expr = parse("1d6!!p").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 1,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::Explode {
+                    compounding: true,
+                    penetrating: true,
+                    condition: None,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_compounding_condition() {
+        let expr = parse("1d6!!>4").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 1,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::Explode {
+                    compounding: true,
+                    penetrating: false,
+                    condition: Some(Condition {
+                        compare: Compare::GreaterThan,
+                        value: 4,
+                    }),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_compounding_penetrating_condition() {
+        let expr = parse("1d6!!p>4").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(Roll {
+                count: 1,
+                sides: Sides::Number(6),
+                modifiers: vec![Modifier::Explode {
+                    compounding: true,
                     penetrating: true,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
