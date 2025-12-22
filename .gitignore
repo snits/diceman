@@ -27,3 +27,6 @@ venv/
 .DS_Store
 Thumbs.db
 session-handoff.md
+
+# bv (beads viewer) local config and caches
+.bv/
