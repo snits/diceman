@@ -145,8 +145,8 @@ impl<R: Rng> Evaluator<'_, R> {
                 Modifier::Reroll { once, condition } => {
                     self.apply_reroll(&mut dice, &roll.sides, *once, condition.as_ref())?;
                 }
-                Modifier::Explode { penetrating, condition } => {
-                    self.apply_explode(&mut dice, &roll.sides, *penetrating, condition.as_ref())?;
+                Modifier::Explode { compounding, penetrating, condition } => {
+                    self.apply_explode(&mut dice, &roll.sides, *compounding, *penetrating, condition.as_ref())?;
                 }
                 Modifier::KeepHighest(n) => self.apply_keep_highest(&mut dice, *n),
                 Modifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
@@ -227,6 +227,7 @@ impl<R: Rng> Evaluator<'_, R> {
         &mut self,
         dice: &mut Vec<DieResult>,
         sides: &Sides,
+        compounding: bool,
         penetrating: bool,
         condition: Option<&Condition>,
     ) -> Result<()> {
@@ -257,11 +258,26 @@ impl<R: Rng> Evaluator<'_, R> {
                 // Penetrating: subtract 1 from added value (not from check)
                 let added_value = if penetrating { new_value - 1 } else { new_value };
 
-                dice[i].value += added_value;
-                dice[i].rolls.push(new_value);
+                if compounding {
+                    // Compounding: add to same die
+                    dice[i].value += added_value;
+                    dice[i].rolls.push(new_value);
+                } else {
+                    // Standard: create new die
+                    dice.push(DieResult {
+                        value: added_value,
+                        rolls: vec![new_value],
+                        dropped: false,
+                    });
+                }
 
                 current_value = new_value;
                 explode_count += 1;
+
+                // For non-compounding, break so the new die gets checked in the outer loop
+                if !compounding {
+                    break;
+                }
             }
             i += 1;
         }
@@ -366,8 +382,11 @@ impl<R: Rng> Evaluator<'_, R> {
                 Modifier::KeepLowest(n) => format!("kl{}", n),
                 Modifier::DropHighest(n) => format!("dh{}", n),
                 Modifier::DropLowest(n) => format!("dl{}", n),
-                Modifier::Explode { penetrating, condition } => {
+                Modifier::Explode { compounding, penetrating, condition } => {
                     let mut s = "!".to_string();
+                    if *compounding {
+                        s.push('!');
+                    }
                     if *penetrating {
                         s.push('p');
                     }
@@ -594,6 +613,7 @@ mod tests {
             count: 1,
             sides: Sides::Number(6),
             modifiers: vec![Modifier::Explode {
+                compounding: true,
                 penetrating: true,
                 condition: None,
             }],
@@ -612,6 +632,7 @@ mod tests {
             count: 1,
             sides: Sides::Number(6),
             modifiers: vec![Modifier::Explode {
+                compounding: true,
                 penetrating: true,
                 condition: None,
             }],
@@ -622,5 +643,90 @@ mod tests {
         let mut rng = TestRng::new(vec![4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 4);
+    }
+
+    #[test]
+    fn test_evaluate_standard_explode_creates_new_dice() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                compounding: false,
+                penetrating: false,
+                condition: None,
+            }],
+        };
+        let expr = Expr::Roll(roll);
+        // Rolls: 6 (explode, create new die), 4 (stop)
+        // Result: 2 dice with values 6 and 4
+        let mut rng = TestRng::new(vec![6, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 10); // 6 + 4
+        assert_eq!(result.dice.len(), 2); // Two separate dice
+    }
+
+    #[test]
+    fn test_evaluate_standard_explode_chain() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                compounding: false,
+                penetrating: false,
+                condition: None,
+            }],
+        };
+        let expr = Expr::Roll(roll);
+        // Rolls: 6 (explode), 6 (explode), 6 (explode), 4 (stop)
+        // Result: 4 dice with values 6, 6, 6, 4
+        let mut rng = TestRng::new(vec![6, 6, 6, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 22); // 6 + 6 + 6 + 4
+        assert_eq!(result.dice.len(), 4); // Four separate dice
+    }
+
+    #[test]
+    fn test_evaluate_compounding_explode() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                compounding: true,
+                penetrating: false,
+                condition: None,
+            }],
+        };
+        let expr = Expr::Roll(roll);
+        // Rolls: 6 (explode), 6 (explode), 4 (stop)
+        // Result: 1 die with value 6 + 6 + 4 = 16
+        let mut rng = TestRng::new(vec![6, 6, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 16); // 6 + 6 + 4
+        assert_eq!(result.dice.len(), 1); // One die with compounded value
+    }
+
+    #[test]
+    fn test_evaluate_explode_with_keep() {
+        let roll = Roll {
+            count: 2,
+            sides: Sides::Number(6),
+            modifiers: vec![
+                Modifier::Explode {
+                    compounding: false,
+                    penetrating: false,
+                    condition: None,
+                },
+                Modifier::KeepHighest(2),
+            ],
+        };
+        let expr = Expr::Roll(roll);
+        // Initial rolls: 6 (explode), 3
+        // Explosion: 5 (stop)
+        // Result: 3 dice (6, 5, 3), keep highest 2 (6, 5)
+        let mut rng = TestRng::new(vec![6, 3, 5]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 11); // 6 + 5 (3 dropped)
+        assert_eq!(result.dice.len(), 3); // Three dice total
+        assert_eq!(result.dice.iter().filter(|d| !d.dropped).count(), 2); // 2 kept
     }
 }
