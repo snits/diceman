@@ -38,6 +38,8 @@ pub enum Token {
     R,
     /// Once modifier: 'o'.
     O,
+    /// Penetrating modifier: 'p'.
+    P,
     /// Equal comparison: '='.
     Eq,
     /// Less than: '<'.
@@ -153,6 +155,10 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(Token::O)
             }
+            'p' | 'P' => {
+                self.chars.next();
+                Ok(Token::P)
+            }
             '=' => {
                 self.chars.next();
                 Ok(Token::Eq)
@@ -248,6 +254,17 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::Percent);
         assert_eq!(lexer.next_token().unwrap(), Token::D);
         assert_eq!(lexer.next_token().unwrap(), Token::Fudge);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_penetrating() {
+        let mut lexer = Lexer::new("1d6!p");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
+        assert_eq!(lexer.next_token().unwrap(), Token::Explode);
+        assert_eq!(lexer.next_token().unwrap(), Token::P);
         assert_eq!(lexer.next_token().unwrap(), Token::Eof);
     }
 }
