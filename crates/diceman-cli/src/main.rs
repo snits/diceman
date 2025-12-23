@@ -32,6 +32,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Show dice notation reference
+    Notation,
 }
 
 fn main() {
@@ -63,6 +65,9 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+        }
+        Commands::Notation => {
+            print_notation_reference();
         }
     }
 }
@@ -100,4 +105,72 @@ fn print_sim_histogram(expression: &str, result: &diceman::SimResult) {
 
     println!();
     println!("mean: {:.2}, std: {:.2}", result.mean, result.std_dev);
+}
+
+fn print_notation_reference() {
+    println!(
+        r#"DICE NOTATION REFERENCE
+
+BASIC ROLLS
+  NdS       Roll N dice with S sides (2d6, 1d20)
+  dS        Roll 1 die (d20 = 1d20)
+  d%        Percentile die (d100)
+  dF        Fudge die (-1, 0, +1)
+
+ARITHMETIC
+  + - * /   Basic operations (2d6 + 5, (1d6 + 2) * 3)
+  (...)     Grouping
+
+KEEP AND DROP
+  khN       Keep highest N dice (4d6kh3)
+  klN       Keep lowest N dice (2d20kl1 for disadvantage)
+  kN        Keep highest N (shorthand for khN)
+  dhN       Drop highest N dice
+  dlN       Drop lowest N dice (4d6dl1)
+
+EXPLODING DICE
+  !         Explode on max, new die per explosion (Roll20 style)
+  !!        Compounding explode, add to same die (Shadowrun style)
+  !p        Penetrating explode, -1 per explosion (HackMaster style)
+  !!p       Compounding penetrating
+
+  With conditions:
+  !>N       Explode on greater than N
+  !>=N      Explode on greater than or equal to N
+  !<N       Explode on less than N
+  !=N       Explode on equal to N
+
+  Examples:
+  1d6!      Standard exploding d6
+  1d6!!     Compounding (6+6+4 shows as [16])
+  1d6!p     Penetrating (6+5+3 shows as [6, 4, 2])
+  1d10!>=8  Explode on 8, 9, or 10
+
+REROLL
+  r         Reroll 1s until not 1
+  ro        Reroll once only
+  r<N       Reroll below N
+  r<=N      Reroll at or below N
+
+  Examples:
+  1d6r      Reroll 1s
+  2d6r<3    Reroll 1s and 2s
+  1d20ro    Reroll first 1 only
+
+SUCCESS COUNTING
+  >N        Count dice greater than N
+  >=N       Count dice greater than or equal to N
+  <N        Count dice less than N
+  <=N       Count dice less than or equal to N
+  =N        Count dice equal to N
+
+  Examples:
+  5d10>=8   World of Darkness (count 8, 9, 10)
+  6d6>4     Count 5s and 6s
+  8d6=6     Count only 6s
+
+MODIFIER ORDER
+  Modifiers apply: reroll -> explode -> keep/drop -> success count
+  Example: 4d6r!kh3 rerolls 1s, explodes 6s, then keeps highest 3"#
+    );
 }
