@@ -18,6 +18,8 @@ diceman roll "2d6 + 5"       # Roll 2d6 and add 5
 diceman roll "1d20 + 7"      # Attack roll with modifier
 ```
 
+**Note:** Quote expressions containing `>`, `<`, `!`, or `*` to prevent shell interpretation.
+
 ### Simulate distributions
 
 ```bash
