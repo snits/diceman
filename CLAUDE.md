@@ -57,7 +57,7 @@ Thin wrapper with `roll` and `sim` subcommands. Supports `--json` output.
 - Basic: `2d6`, `1d20`, `d%` (d100), `4dF` (fudge)
 - Arithmetic: `2d6 + 5`, `(1d6 + 2) * 3`
 - Keep: `4d6kh3` (keep highest 3), `2d20kl1` (keep lowest 1)
-- Explode: `1d6!` (explode on max), `1d6!>5` (explode on 5+), `1d6!p` (penetrating)
+- Explode: `1d6!` (explode on max, new dice), `1d6!!` (compounding), `1d6!p` (penetrating), `1d6!>5` (explode on 5+)
 - Reroll: `1d6r` (reroll 1s), `1d6r<3` (reroll below 3)
 
 ## Issue Tracking

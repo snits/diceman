@@ -729,4 +729,26 @@ mod tests {
         assert_eq!(result.dice.len(), 3); // Three dice total
         assert_eq!(result.dice.iter().filter(|d| !d.dropped).count(), 2); // 2 kept
     }
+
+    #[test]
+    fn test_evaluate_standard_penetrating_explode() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                compounding: false,
+                penetrating: true,
+                condition: None,
+            }],
+        };
+        let expr = Expr::Roll(roll);
+        // Rolls: 6 (explode, create new die with -1), 4 (stop)
+        // Result: 2 dice with values 6 and 3 (4-1 penetrating)
+        let mut rng = TestRng::new(vec![6, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 9); // 6 + 3 (4-1)
+        assert_eq!(result.dice.len(), 2); // Two separate dice
+        assert_eq!(result.dice[0].value, 6);
+        assert_eq!(result.dice[1].value, 3); // 4-1 penetrating
+    }
 }
