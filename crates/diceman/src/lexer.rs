@@ -40,6 +40,10 @@ pub enum Token {
     O,
     /// Penetrating modifier: 'p'.
     P,
+    /// Critical success marker: 'cs'.
+    CritSuccess,
+    /// Critical failure marker: 'cf'.
+    CritFail,
     /// Equal comparison: '='.
     Eq,
     /// Less than: '<'.
@@ -159,6 +163,24 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(Token::P)
             }
+            'c' | 'C' => {
+                self.chars.next(); // consume 'c'
+                if let Some(&(_, next_ch)) = self.chars.peek() {
+                    match next_ch {
+                        's' | 'S' => {
+                            self.chars.next();
+                            Ok(Token::CritSuccess)
+                        }
+                        'f' | 'F' => {
+                            self.chars.next();
+                            Ok(Token::CritFail)
+                        }
+                        _ => Err(Error::UnexpectedChar(ch, pos)),
+                    }
+                } else {
+                    Err(Error::UnexpectedChar(ch, pos))
+                }
+            }
             '=' => {
                 self.chars.next();
                 Ok(Token::Eq)
@@ -265,6 +287,28 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
         assert_eq!(lexer.next_token().unwrap(), Token::Explode);
         assert_eq!(lexer.next_token().unwrap(), Token::P);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_crit_success() {
+        let mut lexer = Lexer::new("1d20cs20");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(20));
+        assert_eq!(lexer.next_token().unwrap(), Token::CritSuccess);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(20));
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_crit_failure() {
+        let mut lexer = Lexer::new("1d20cf1");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(20));
+        assert_eq!(lexer.next_token().unwrap(), Token::CritFail);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
         assert_eq!(lexer.next_token().unwrap(), Token::Eof);
     }
 }
