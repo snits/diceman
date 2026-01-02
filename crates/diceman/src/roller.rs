@@ -49,6 +49,10 @@ pub struct DieResult {
     pub rolls: Vec<i64>,
     /// Whether this die was dropped/discarded.
     pub dropped: bool,
+    /// Whether this die is marked as a critical success.
+    pub is_crit_success: bool,
+    /// Whether this die is marked as a critical failure.
+    pub is_crit_failure: bool,
 }
 
 /// Result of evaluating a dice expression.
@@ -134,6 +138,8 @@ impl<R: Rng> Evaluator<'_, R> {
                     value,
                     rolls: vec![value],
                     dropped: false,
+                    is_crit_success: false,
+                    is_crit_failure: false,
                 }
             })
             .collect();
@@ -157,6 +163,9 @@ impl<R: Rng> Evaluator<'_, R> {
                 }
             }
         }
+
+        // Mark critical successes/failures (display-only)
+        self.mark_crits(&mut dice, &roll.crit_success, &roll.crit_failure);
 
         // Calculate total: count successes or sum values
         let total: i64 = if let Some(condition) = success_condition {
@@ -268,6 +277,8 @@ impl<R: Rng> Evaluator<'_, R> {
                         value: added_value,
                         rolls: vec![new_value],
                         dropped: false,
+                        is_crit_success: false,
+                        is_crit_failure: false,
                     });
                 }
 
@@ -361,6 +372,22 @@ impl<R: Rng> Evaluator<'_, R> {
         }
     }
 
+    fn mark_crits(
+        &self,
+        dice: &mut [DieResult],
+        crit_success: &Option<Condition>,
+        crit_failure: &Option<Condition>,
+    ) {
+        for die in dice.iter_mut() {
+            if let Some(ref cond) = crit_success {
+                die.is_crit_success = cond.compare.check(die.value, cond.value);
+            }
+            if let Some(ref cond) = crit_failure {
+                die.is_crit_failure = cond.compare.check(die.value, cond.value);
+            }
+        }
+    }
+
     fn format_roll(
         &self,
         roll: &Roll,
@@ -411,15 +438,37 @@ impl<R: Rng> Evaluator<'_, R> {
             })
             .collect();
 
-        // Format dice, marking successes if counting
+        let crit_str = format!(
+            "{}{}",
+            roll.crit_success.as_ref().map_or(String::new(), |c| {
+                if c.compare == Compare::Equal {
+                    format!("cs{}", c.value)
+                } else {
+                    format!("cs{}{}", c.compare, c.value)
+                }
+            }),
+            roll.crit_failure.as_ref().map_or(String::new(), |c| {
+                if c.compare == Compare::Equal {
+                    format!("cf{}", c.value)
+                } else {
+                    format!("cf{}{}", c.compare, c.value)
+                }
+            }),
+        );
+
+        // Format dice, marking crits and successes
         let dice_str: String = dice
             .iter()
             .map(|d| {
                 if d.dropped {
                     format!("({})", d.value)
+                } else if d.is_crit_success {
+                    format!("{}**", d.value)
+                } else if d.is_crit_failure {
+                    format!("{}*", d.value)
                 } else if let Some(condition) = success_condition {
                     if condition.compare.check(d.value, condition.value) {
-                        format!("{}*", d.value) // Mark successes with *
+                        format!("{}*", d.value) // Success counting marker
                     } else {
                         d.value.to_string()
                     }
@@ -433,13 +482,13 @@ impl<R: Rng> Evaluator<'_, R> {
         if success_condition.is_some() {
             let success_word = if total == 1 { "success" } else { "successes" };
             format!(
-                "{}d{}{}[{}] = {} {}",
-                roll.count, sides_str, modifiers_str, dice_str, total, success_word
+                "{}d{}{}{}[{}] = {} {}",
+                roll.count, sides_str, modifiers_str, crit_str, dice_str, total, success_word
             )
         } else {
             format!(
-                "{}d{}{}[{}] = {}",
-                roll.count, sides_str, modifiers_str, dice_str, total
+                "{}d{}{}{}[{}] = {}",
+                roll.count, sides_str, modifiers_str, crit_str, dice_str, total
             )
         }
     }
@@ -782,5 +831,87 @@ mod tests {
         assert_eq!(result.dice.len(), 2); // Two separate dice
         assert_eq!(result.dice[0].value, 6);
         assert_eq!(result.dice[1].value, 3); // 4-1 penetrating
+    }
+
+    #[test]
+    fn test_crit_success_marker_output() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(20),
+            modifiers: vec![],
+            crit_success: Some(Condition {
+                compare: Compare::Equal,
+                value: 20,
+            }),
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![20]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(result.expression.contains("20**"));
+        assert_eq!(result.dice[0].is_crit_success, true);
+    }
+
+    #[test]
+    fn test_crit_failure_marker_output() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(20),
+            modifiers: vec![],
+            crit_success: None,
+            crit_failure: Some(Condition {
+                compare: Compare::Equal,
+                value: 1,
+            }),
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(result.expression.contains("1*"));
+        assert_eq!(result.dice[0].is_crit_failure, true);
+    }
+
+    #[test]
+    fn test_crit_both_markers_output() {
+        let roll = Roll {
+            count: 3,
+            sides: Sides::Number(20),
+            modifiers: vec![],
+            crit_success: Some(Condition {
+                compare: Compare::Equal,
+                value: 20,
+            }),
+            crit_failure: Some(Condition {
+                compare: Compare::Equal,
+                value: 1,
+            }),
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![20, 10, 1]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(result.expression.contains("20**"));
+        assert!(result.expression.contains("1*"));
+        assert!(!result.expression.contains("10*"));
+    }
+
+    #[test]
+    fn test_crit_no_effect_on_total() {
+        let roll = Roll {
+            count: 2,
+            sides: Sides::Number(20),
+            modifiers: vec![],
+            crit_success: Some(Condition {
+                compare: Compare::Equal,
+                value: 20,
+            }),
+            crit_failure: Some(Condition {
+                compare: Compare::Equal,
+                value: 1,
+            }),
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![20, 1]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 21); // 20 + 1, crits don't change value
     }
 }
