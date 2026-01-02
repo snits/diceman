@@ -165,7 +165,7 @@ impl<'a> Lexer<'a> {
             }
             'c' | 'C' => {
                 self.chars.next(); // consume 'c'
-                if let Some(&(_, next_ch)) = self.chars.peek() {
+                if let Some(&(next_pos, next_ch)) = self.chars.peek() {
                     match next_ch {
                         's' | 'S' => {
                             self.chars.next();
@@ -175,7 +175,7 @@ impl<'a> Lexer<'a> {
                             self.chars.next();
                             Ok(Token::CritFail)
                         }
-                        _ => Err(Error::UnexpectedChar(ch, pos)),
+                        _ => Err(Error::UnexpectedChar(next_ch, next_pos)),
                     }
                 } else {
                     Err(Error::UnexpectedChar(ch, pos))
@@ -310,5 +310,34 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::CritFail);
         assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
         assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_bare_c_error() {
+        let mut lexer = Lexer::new("c");
+        let result = lexer.next_token();
+        assert!(result.is_err());
+        if let Err(Error::UnexpectedChar(ch, pos)) = result {
+            assert_eq!(ch, 'c');
+            assert_eq!(pos, 0);
+        } else {
+            panic!("Expected UnexpectedChar error");
+        }
+    }
+
+    #[test]
+    fn test_invalid_c_sequence_error() {
+        let mut lexer = Lexer::new("1d20cx");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(20));
+        let result = lexer.next_token();
+        assert!(result.is_err());
+        if let Err(Error::UnexpectedChar(ch, pos)) = result {
+            assert_eq!(ch, 'x');
+            assert_eq!(pos, 5);
+        } else {
+            panic!("Expected UnexpectedChar error for 'x' at position 5");
+        }
     }
 }
