@@ -482,6 +482,8 @@ mod tests {
             count: 2,
             sides: Sides::Number(6),
             modifiers: vec![],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![3, 4]);
@@ -495,6 +497,8 @@ mod tests {
             count: 4,
             sides: Sides::Number(6),
             modifiers: vec![Modifier::KeepHighest(3)],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Should keep 5, 3, 6 = 14
@@ -510,6 +514,8 @@ mod tests {
                 count: 2,
                 sides: Sides::Number(6),
                 modifiers: vec![],
+                crit_success: None,
+                crit_failure: None,
             })),
             right: Box::new(Expr::Number(5)),
         };
@@ -524,6 +530,8 @@ mod tests {
             count: 4,
             sides: Sides::Fudge,
             modifiers: vec![],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![1, 2, 3, 2]); // -1, 0, 1, 0 = 0
@@ -537,6 +545,8 @@ mod tests {
             count: 4,
             sides: Sides::Number(6),
             modifiers: vec![Modifier::DropLowest(1)],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 1, keep 5+3+6 = 14
@@ -550,6 +560,8 @@ mod tests {
             count: 4,
             sides: Sides::Number(6),
             modifiers: vec![Modifier::DropHighest(1)],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 6, keep 1+5+3 = 9
@@ -566,6 +578,8 @@ mod tests {
                 compare: Compare::GreaterOrEqual,
                 value: 8,
             })],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]); // 10, 8, 9 >= 8 = 3 successes
@@ -582,6 +596,8 @@ mod tests {
                 compare: Compare::Equal,
                 value: 6,
             })],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![1, 2, 3]); // No 6s = 0 successes
@@ -598,6 +614,8 @@ mod tests {
                 compare: Compare::GreaterOrEqual,
                 value: 8,
             })],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         let mut rng = TestRng::new(vec![10, 5, 8, 3]); // 10*, 5, 8*, 3 = 2 successes
@@ -617,6 +635,8 @@ mod tests {
                 penetrating: true,
                 condition: None,
             }],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Rolls: 6 (explode), 6 (explode), 4 (stop)
@@ -636,6 +656,8 @@ mod tests {
                 penetrating: true,
                 condition: None,
             }],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Roll: 4 (no explosion)
@@ -655,6 +677,8 @@ mod tests {
                 penetrating: false,
                 condition: None,
             }],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Rolls: 6 (explode, create new die), 4 (stop)
@@ -675,6 +699,8 @@ mod tests {
                 penetrating: false,
                 condition: None,
             }],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Rolls: 6 (explode), 6 (explode), 6 (explode), 4 (stop)
@@ -695,6 +721,8 @@ mod tests {
                 penetrating: false,
                 condition: None,
             }],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Rolls: 6 (explode), 6 (explode), 4 (stop)
@@ -718,6 +746,8 @@ mod tests {
                 },
                 Modifier::KeepHighest(2),
             ],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Initial rolls: 6 (explode), 3
@@ -740,6 +770,8 @@ mod tests {
                 penetrating: true,
                 condition: None,
             }],
+            crit_success: None,
+            crit_failure: None,
         };
         let expr = Expr::Roll(roll);
         // Rolls: 6 (explode, create new die with -1), 4 (stop)
