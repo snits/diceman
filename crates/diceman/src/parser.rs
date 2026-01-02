@@ -143,7 +143,7 @@ impl<'a> Parser<'a> {
         // Parse any modifiers
         let modifiers = self.modifiers()?;
 
-        // Parse critical markers (order doesn't matter, can appear in any order)
+        // Parse critical markers (cs and cf can appear in any order)
         let (crit_success, crit_failure) = self.crit_markers()?;
 
         Ok(Expr::Roll(Roll {
@@ -410,7 +410,6 @@ impl<'a> Parser<'a> {
             })
         } else if let Token::Number(n) = self.current {
             // Just a number means Equal
-            let n = n;
             self.advance()?;
             Ok(Condition {
                 compare: Compare::Equal,
@@ -861,6 +860,18 @@ mod tests {
     fn test_parse_duplicate_crit_failure_error() {
         let err = parse("1d20cf1cf2").unwrap_err();
         assert!(matches!(err, Error::DuplicateCritMarker(_)));
+    }
+
+    #[test]
+    fn test_parse_crit_success_missing_value() {
+        let err = parse("1d20cs").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_crit_failure_missing_value() {
+        let err = parse("1d20cf").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
     }
 
     #[test]
