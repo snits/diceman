@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("Division by zero")]
     DivisionByZero,
+
+    #[error("Duplicate critical marker: {0}")]
+    DuplicateCritMarker(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
