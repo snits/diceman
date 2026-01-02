@@ -147,6 +147,8 @@ impl<'a> Parser<'a> {
             count,
             sides,
             modifiers,
+            crit_success: None,
+            crit_failure: None,
         }))
     }
 
@@ -392,6 +394,8 @@ mod tests {
                 count: 2,
                 sides: Sides::Number(6),
                 modifiers: vec![],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -405,6 +409,8 @@ mod tests {
                 count: 4,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::KeepHighest(3)],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -435,6 +441,8 @@ mod tests {
                     penetrating: false,
                     condition: None,
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -455,6 +463,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -472,6 +482,8 @@ mod tests {
                     penetrating: true,
                     condition: None,
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -492,6 +504,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -509,6 +523,8 @@ mod tests {
                     penetrating: false,
                     condition: None,
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -526,6 +542,8 @@ mod tests {
                     penetrating: true,
                     condition: None,
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -546,6 +564,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -566,6 +586,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -579,6 +601,8 @@ mod tests {
                 count: 1,
                 sides: Sides::Percent,
                 modifiers: vec![],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -592,6 +616,8 @@ mod tests {
                 count: 4,
                 sides: Sides::Fudge,
                 modifiers: vec![],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -617,6 +643,8 @@ mod tests {
                 count: 4,
                 sides: Sides::Number(6),
                 modifiers: vec![Modifier::DropLowest(1)],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -630,6 +658,8 @@ mod tests {
                 count: 2,
                 sides: Sides::Number(20),
                 modifiers: vec![Modifier::DropHighest(1)],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -646,6 +676,8 @@ mod tests {
                     compare: Compare::GreaterOrEqual,
                     value: 8,
                 })],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -662,6 +694,8 @@ mod tests {
                     compare: Compare::GreaterThan,
                     value: 4,
                 })],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }
@@ -678,6 +712,8 @@ mod tests {
                     compare: Compare::Equal,
                     value: 6,
                 })],
+                crit_success: None,
+                crit_failure: None,
             })
         );
     }

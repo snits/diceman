@@ -29,6 +29,10 @@ pub struct Roll {
     pub sides: Sides,
     /// Modifiers applied to the roll.
     pub modifiers: Vec<Modifier>,
+    /// Critical success marker condition.
+    pub crit_success: Option<Condition>,
+    /// Critical failure marker condition.
+    pub crit_failure: Option<Condition>,
 }
 
 /// The type of dice to roll.
@@ -147,5 +151,29 @@ impl fmt::Display for Compare {
             Compare::GreaterThan => write!(f, ">"),
             Compare::GreaterOrEqual => write!(f, ">="),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_roll_has_crit_fields() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(20),
+            modifiers: vec![],
+            crit_success: Some(Condition {
+                compare: Compare::Equal,
+                value: 20,
+            }),
+            crit_failure: Some(Condition {
+                compare: Compare::Equal,
+                value: 1,
+            }),
+        };
+        assert!(roll.crit_success.is_some());
+        assert!(roll.crit_failure.is_some());
     }
 }
