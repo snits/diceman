@@ -921,32 +921,19 @@ mod tests {
 
     #[test]
     fn test_crit_with_success_counting_error() {
-        let result = parse("5d10>=8cs10");
-        assert!(result.is_err());
-        // Verify the error is specifically about crit/success incompatibility
-        match result {
-            Err(Error::CritWithSuccessCounting) => {}
-            _ => panic!("Expected CritWithSuccessCounting error"),
-        }
+        let err = parse("5d10>=8cs10").unwrap_err();
+        assert!(matches!(err, Error::CritWithSuccessCounting));
     }
 
     #[test]
     fn test_crit_failure_with_success_counting_error() {
-        let result = parse("5d10>=8cf1");
-        assert!(result.is_err());
-        match result {
-            Err(Error::CritWithSuccessCounting) => {}
-            _ => panic!("Expected CritWithSuccessCounting error"),
-        }
+        let err = parse("5d10>=8cf1").unwrap_err();
+        assert!(matches!(err, Error::CritWithSuccessCounting));
     }
 
     #[test]
     fn test_both_crit_with_success_counting_error() {
-        let result = parse("5d10>=8cs10cf1");
-        assert!(result.is_err());
-        match result {
-            Err(Error::CritWithSuccessCounting) => {}
-            _ => panic!("Expected CritWithSuccessCounting error"),
-        }
+        let err = parse("5d10>=8cs10cf1").unwrap_err();
+        assert!(matches!(err, Error::CritWithSuccessCounting));
     }
 }
