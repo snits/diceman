@@ -31,6 +31,9 @@ pub enum Error {
 
     #[error("Duplicate critical marker: {0}")]
     DuplicateCritMarker(String),
+
+    #[error("Critical markers cannot be combined with success counting")]
+    CritWithSuccessCounting,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

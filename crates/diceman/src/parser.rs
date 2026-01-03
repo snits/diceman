@@ -146,6 +146,12 @@ impl<'a> Parser<'a> {
         // Parse critical markers (cs and cf can appear in any order)
         let (crit_success, crit_failure) = self.crit_markers()?;
 
+        // Validate: cs/cf cannot combine with success counting
+        let has_success_counting = modifiers.iter().any(|m| matches!(m, Modifier::CountSuccesses(_)));
+        if has_success_counting && (crit_success.is_some() || crit_failure.is_some()) {
+            return Err(Error::CritWithSuccessCounting);
+        }
+
         Ok(Expr::Roll(Roll {
             count,
             sides,
@@ -911,5 +917,36 @@ mod tests {
                 }),
             })
         );
+    }
+
+    #[test]
+    fn test_crit_with_success_counting_error() {
+        let result = parse("5d10>=8cs10");
+        assert!(result.is_err());
+        // Verify the error is specifically about crit/success incompatibility
+        match result {
+            Err(Error::CritWithSuccessCounting) => {}
+            _ => panic!("Expected CritWithSuccessCounting error"),
+        }
+    }
+
+    #[test]
+    fn test_crit_failure_with_success_counting_error() {
+        let result = parse("5d10>=8cf1");
+        assert!(result.is_err());
+        match result {
+            Err(Error::CritWithSuccessCounting) => {}
+            _ => panic!("Expected CritWithSuccessCounting error"),
+        }
+    }
+
+    #[test]
+    fn test_both_crit_with_success_counting_error() {
+        let result = parse("5d10>=8cs10cf1");
+        assert!(result.is_err());
+        match result {
+            Err(Error::CritWithSuccessCounting) => {}
+            _ => panic!("Expected CritWithSuccessCounting error"),
+        }
     }
 }
