@@ -378,7 +378,7 @@ impl<R: Rng> Evaluator<'_, R> {
         crit_success: &Option<Condition>,
         crit_failure: &Option<Condition>,
     ) {
-        for die in dice.iter_mut() {
+        for die in dice.iter_mut().filter(|d| !d.dropped) {
             if let Some(ref cond) = crit_success {
                 die.is_crit_success = cond.compare.check(die.value, cond.value);
             }
@@ -913,5 +913,33 @@ mod tests {
         let mut rng = TestRng::new(vec![20, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 21); // 20 + 1, crits don't change value
+    }
+
+    #[test]
+    fn test_dropped_dice_no_crit_marker() {
+        let roll = Roll {
+            count: 4,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::KeepHighest(3)],
+            crit_success: Some(Condition {
+                compare: Compare::Equal,
+                value: 6,
+            }),
+            crit_failure: Some(Condition {
+                compare: Compare::Equal,
+                value: 1,
+            }),
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![6, 4, 3, 1]); // 1 will be dropped
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+
+        // The dropped die (value 1) should NOT have is_crit_failure set
+        let dropped_die = result.dice.iter().find(|d| d.dropped).unwrap();
+        assert!(!dropped_die.is_crit_failure);
+
+        // The kept die (value 6) SHOULD have is_crit_success set
+        let crit_die = result.dice.iter().find(|d| d.value == 6).unwrap();
+        assert!(crit_die.is_crit_success);
     }
 }
