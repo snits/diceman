@@ -125,6 +125,27 @@ Count dice that meet a condition instead of summing values.
 - `6d6>4` - Count 5s and 6s
 - `8d6=6` - Count only 6s
 
+### Critical Markers
+
+Mark dice results as critical successes or failures for visual feedback.
+
+| Notation | Description |
+|----------|-------------|
+| `csN` | Mark rolls equal to N as critical success |
+| `cs>N` | Mark rolls greater than N as critical success |
+| `cs>=N` | Mark rolls greater than or equal to N as critical success |
+| `cfN` | Mark rolls equal to N as critical failure |
+| `cf<N` | Mark rolls less than N as critical failure |
+
+**Output:** Critical successes show `**`, critical failures show `*`.
+
+**Examples:**
+- `1d20cs20cf1` → `[20**] = 20` or `[1*] = 1` or `[15] = 15`
+- `1d20cs>=19cf1` → Expanded crit range (19 or 20 is crit)
+- `4d6cs6cf1` → `[6**, 4, 3, 1*] = 14`
+
+**Note:** Critical markers cannot be combined with success counting.
+
 ### Modifier Order
 
 Modifiers are applied in this order: **reroll, explode, keep/drop, success count**
