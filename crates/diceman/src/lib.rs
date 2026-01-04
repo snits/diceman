@@ -146,4 +146,18 @@ mod tests {
         assert!(result.max <= 12);
         assert!((result.mean - 7.0).abs() < 0.5);
     }
+
+    #[test]
+    fn test_crit_markers_integration() {
+        // Basic crit success
+        let mut rng = FastRng::with_seed(12345);
+        let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
+        // Verify it parses and evaluates without error
+        assert!(result.total >= 1 && result.total <= 20);
+
+        // With expanded crit range
+        let mut rng = FastRng::with_seed(12345);
+        let result = roll_with_rng("1d20cs>=19cf1", &mut rng).unwrap();
+        assert!(result.total >= 1 && result.total <= 20);
+    }
 }
