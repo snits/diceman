@@ -149,15 +149,62 @@ mod tests {
 
     #[test]
     fn test_crit_markers_integration() {
-        // Basic crit success
-        let mut rng = FastRng::with_seed(12345);
-        let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
-        // Verify it parses and evaluates without error
-        assert!(result.total >= 1 && result.total <= 20);
+        // Test RNG that returns deterministic values
+        struct TestRng {
+            values: Vec<u32>,
+            index: usize,
+        }
+        impl TestRng {
+            fn new(values: Vec<u32>) -> Self {
+                Self { values, index: 0 }
+            }
+        }
+        impl Rng for TestRng {
+            fn roll(&mut self, _max: u32) -> u32 {
+                let value = self.values[self.index % self.values.len()];
+                self.index += 1;
+                value
+            }
+        }
 
-        // With expanded crit range
-        let mut rng = FastRng::with_seed(12345);
+        // Test crit success marker
+        let mut rng = TestRng::new(vec![20]);
+        let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
+        assert_eq!(result.total, 20);
+        assert!(
+            result.expression.contains("20**"),
+            "Expected crit success marker ** in output: {}",
+            result.expression
+        );
+
+        // Test crit failure marker
+        let mut rng = TestRng::new(vec![1]);
+        let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
+        assert_eq!(result.total, 1);
+        assert!(
+            result.expression.contains("1*"),
+            "Expected crit failure marker * in output: {}",
+            result.expression
+        );
+
+        // Test normal roll (no markers)
+        let mut rng = TestRng::new(vec![10]);
+        let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
+        assert_eq!(result.total, 10);
+        assert!(
+            !result.expression.contains("10*") && !result.expression.contains("10**"),
+            "Expected no crit markers for normal roll: {}",
+            result.expression
+        );
+
+        // Test expanded crit range
+        let mut rng = TestRng::new(vec![19]);
         let result = roll_with_rng("1d20cs>=19cf1", &mut rng).unwrap();
-        assert!(result.total >= 1 && result.total <= 20);
+        assert_eq!(result.total, 19);
+        assert!(
+            result.expression.contains("19**"),
+            "Expected crit success marker ** for 19 in expanded range: {}",
+            result.expression
+        );
     }
 }

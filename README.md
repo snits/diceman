@@ -134,14 +134,20 @@ Mark dice results as critical successes or failures for visual feedback.
 | `csN` | Mark rolls equal to N as critical success |
 | `cs>N` | Mark rolls greater than N as critical success |
 | `cs>=N` | Mark rolls greater than or equal to N as critical success |
+| `cs<N` | Mark rolls less than N as critical success |
+| `cs<=N` | Mark rolls less than or equal to N as critical success |
 | `cfN` | Mark rolls equal to N as critical failure |
+| `cf>N` | Mark rolls greater than N as critical failure |
+| `cf>=N` | Mark rolls greater than or equal to N as critical failure |
 | `cf<N` | Mark rolls less than N as critical failure |
+| `cf<=N` | Mark rolls less than or equal to N as critical failure |
 
 **Output:** Critical successes show `**`, critical failures show `*`.
 
 **Examples:**
 - `1d20cs20cf1` → `[20**] = 20` or `[1*] = 1` or `[15] = 15`
 - `1d20cs>=19cf1` → Expanded crit range (19 or 20 is crit)
+- `1d20cs20cf<=2` → Expanded crit fail range (1 or 2 is crit fail)
 - `4d6cs6cf1` → `[6**, 4, 3, 1*] = 14`
 
 **Note:** Critical markers cannot be combined with success counting.
