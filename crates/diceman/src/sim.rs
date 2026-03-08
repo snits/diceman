@@ -61,6 +61,20 @@ impl SimResult {
         result
     }
 
+    /// Returns cumulative probability of rolling <= each value, sorted by value.
+    pub fn cumulative_lte(&self) -> Vec<(i64, f64)> {
+        let outcomes = self.sorted_outcomes();
+        let mut result = Vec::with_capacity(outcomes.len());
+        let mut accumulated = 0usize;
+
+        for (value, count) in &outcomes {
+            accumulated += count;
+            result.push((*value, accumulated as f64 / self.n as f64));
+        }
+
+        result
+    }
+
     /// Returns the median value.
     pub fn median(&self) -> f64 {
         let mut values: Vec<i64> = Vec::with_capacity(self.n);
@@ -268,6 +282,31 @@ mod tests {
         // Each entry should be >= the next (monotonically decreasing)
         for i in 1..cum.len() {
             assert!(cum[i - 1].1 >= cum[i].1);
+        }
+    }
+
+    #[test]
+    fn test_cumulative_lte() {
+        let result = simulate("5", 100).unwrap();
+        let cum = result.cumulative_lte();
+
+        assert_eq!(cum.len(), 1);
+        assert_eq!(cum[0], (5, 1.0));
+    }
+
+    #[test]
+    fn test_cumulative_lte_multiple_values() {
+        let result = simulate_seeded("1d4", 10000, 42).unwrap();
+        let cum = result.cumulative_lte();
+
+        // First entry (lowest value) should be its own probability
+        assert!(cum[0].1 > 0.0 && cum[0].1 < 0.5);
+        // Last entry (highest value) should be ~100%
+        let last = cum.last().unwrap();
+        assert!((last.1 - 1.0).abs() < 0.001);
+        // Each entry should be >= the previous (monotonically increasing)
+        for i in 1..cum.len() {
+            assert!(cum[i].1 >= cum[i - 1].1);
         }
     }
 }
