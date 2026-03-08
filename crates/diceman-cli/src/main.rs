@@ -31,6 +31,14 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Show cumulative success probability
+        #[arg(long)]
+        cumulative: bool,
+
+        /// Use "roll under" direction (implies --cumulative)
+        #[arg(long)]
+        lte: bool,
     },
     /// Show dice notation reference
     Notation,
@@ -51,13 +59,17 @@ fn main() {
                 }
             }
         }
-        Commands::Sim { expression, n, json } => {
+        Commands::Sim { expression, n, json, cumulative, lte } => {
             match diceman::simulate(&expression, n) {
                 Ok(result) => {
                     if json {
                         print_sim_json(&result);
                     } else {
                         print_sim_histogram(&expression, &result);
+                        if cumulative || lte {
+                            println!();
+                            print_cumulative_histogram(&result, lte);
+                        }
                     }
                 }
                 Err(e) => {
@@ -105,6 +117,27 @@ fn print_sim_histogram(expression: &str, result: &diceman::SimResult) {
 
     println!();
     println!("mean: {:.2}, std: {:.2}", result.mean, result.std_dev);
+}
+
+fn print_cumulative_histogram(result: &diceman::SimResult, lte: bool) {
+    let cumulative = if lte {
+        result.cumulative_lte()
+    } else {
+        result.cumulative_gte()
+    };
+
+    let direction = if lte { "<=" } else { ">=" };
+    println!("Cumulative ({} target):", direction);
+    println!();
+
+    let max_bar_width = 40;
+
+    for (value, pct) in &cumulative {
+        let bar_width = (pct * max_bar_width as f64) as usize;
+        let bar: String = "█".repeat(bar_width);
+
+        println!("{:>4}: {:40} {:5.1}%", value, bar, pct * 100.0);
+    }
 }
 
 fn print_notation_reference() {
