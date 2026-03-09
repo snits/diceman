@@ -64,12 +64,10 @@ fn main() {
                 Ok(result) => {
                     if json {
                         print_sim_json(&result);
+                    } else if cumulative || lte {
+                        print_side_by_side(&expression, &result, lte);
                     } else {
                         print_sim_histogram(&expression, &result);
-                        if cumulative || lte {
-                            println!();
-                            print_cumulative_histogram(&result, lte);
-                        }
                     }
                 }
                 Err(e) => {
@@ -119,24 +117,40 @@ fn print_sim_histogram(expression: &str, result: &diceman::SimResult) {
     println!("mean: {:.2}, std: {:.2}", result.mean, result.std_dev);
 }
 
-fn print_cumulative_histogram(result: &diceman::SimResult, lte: bool) {
+
+fn print_side_by_side(expression: &str, result: &diceman::SimResult, lte: bool) {
+    let outcomes = result.sorted_outcomes();
+    let max_count = outcomes.iter().map(|(_, c)| *c).max().unwrap_or(1);
+
     let cumulative = if lte {
         result.cumulative_lte()
     } else {
         result.cumulative_gte()
     };
+    let cum_map: std::collections::HashMap<i64, f64> = cumulative.into_iter().collect();
 
     let direction = if lte { "<=" } else { ">=" };
-    println!("Cumulative ({} target):", direction);
+
+    // Header: left-align distribution label, right-align cumulative label
+    // The bar area starts at column 6 (after "{:>4}: ")
+    let left_header = format!("{} (n={})", expression, result.n);
+    let right_header = format!("Cumulative ({} target)", direction);
+    // Position right header so it aligns with the right bar area
+    let header_pad = SIDE_BY_SIDE_TERM_WIDTH.saturating_sub(left_header.len() + right_header.len());
+    println!("{}{:>pad$}", left_header, right_header, pad = header_pad + right_header.len());
     println!();
 
-    let max_bar_width = 40;
+    for (value, count) in &outcomes {
+        let dist_pct = (*count as f64 / result.n as f64) * 100.0;
+        let dist_frac = *count as f64 / max_count as f64;
+        let cum_pct_frac = cum_map.get(value).copied().unwrap_or(0.0);
 
-    for (value, pct) in &cumulative {
-        let bar = braille_bar(*pct, max_bar_width);
-
-        println!("{:>4}: {} {:5.1}%", value, bar, pct * 100.0);
+        let row = format_side_by_side_row(*value, dist_frac, dist_pct, cum_pct_frac, cum_pct_frac * 100.0);
+        println!("{}", row);
     }
+
+    println!();
+    println!("mean: {:.2}, std: {:.2}", result.mean, result.std_dev);
 }
 
 /// Renders a horizontal bar using braille characters for 2x resolution.
@@ -160,9 +174,50 @@ fn braille_bar(fraction: f64, width: usize) -> String {
     bar
 }
 
+/// Layout constants for side-by-side histogram (targeting 80-column terminal).
+/// Format: "{:>4}: [bar] {:5.1}% │ [bar] {:5.1}%"
+const SIDE_BY_SIDE_SEP: &str = " │ ";         // 3 chars (space, box-draw, space)
+const SIDE_BY_SIDE_TERM_WIDTH: usize = 80;
+
+/// Character width available for each bar in side-by-side mode.
+/// 80 - 4 (label) - 2 (": ") - 1 (space before pct) - 6 (pct) - 3 (sep) - 1 (space before pct) - 6 (pct) = 57
+/// 57 / 2 = 28 each, 1 spare char goes to left bar
+const SIDE_BY_SIDE_BAR_LEFT: usize = 29;
+const SIDE_BY_SIDE_BAR_RIGHT: usize = 28;
+
+/// Formats one row of the side-by-side histogram.
+fn format_side_by_side_row(value: i64, dist_frac: f64, dist_pct: f64, cum_frac: f64, cum_pct: f64) -> String {
+    let dist_bar = braille_bar(dist_frac, SIDE_BY_SIDE_BAR_LEFT);
+    let cum_bar = braille_bar(cum_frac, SIDE_BY_SIDE_BAR_RIGHT);
+    format!("{:>4}: {} {:5.1}%{}{} {:5.1}%",
+        value, dist_bar, dist_pct, SIDE_BY_SIDE_SEP, cum_bar, cum_pct)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_by_side_row_fits_80_columns() {
+        let row = format_side_by_side_row(7, 1.0, 16.7, 0.583, 58.3);
+        // Count display width (braille chars are 1-column wide)
+        assert_eq!(row.chars().count(), SIDE_BY_SIDE_TERM_WIDTH,
+            "row was {} chars: {}", row.chars().count(), row);
+    }
+
+    #[test]
+    fn side_by_side_row_consistent_width() {
+        // Various values should all produce exactly 80 chars
+        for (val, df, dp, cf, cp) in [
+            (2, 0.05, 2.8, 1.0, 100.0),
+            (7, 1.0, 16.7, 0.583, 58.3),
+            (12, 0.05, 2.8, 0.028, 2.8),
+        ] {
+            let row = format_side_by_side_row(val, df, dp, cf, cp);
+            assert_eq!(row.chars().count(), SIDE_BY_SIDE_TERM_WIDTH,
+                "val={}: row was {} chars", val, row.chars().count());
+        }
+    }
 
     #[test]
     fn braille_bar_empty() {
