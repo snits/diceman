@@ -109,10 +109,10 @@ fn print_sim_histogram(expression: &str, result: &diceman::SimResult) {
 
     for (value, count) in outcomes {
         let pct = (count as f64 / result.n as f64) * 100.0;
-        let bar_width = (count as f64 / max_count as f64 * max_bar_width as f64) as usize;
-        let bar: String = "█".repeat(bar_width);
+        let fraction = count as f64 / max_count as f64;
+        let bar = braille_bar(fraction, max_bar_width);
 
-        println!("{:>4}: {:40} {:5.1}%", value, bar, pct);
+        println!("{:>4}: {} {:5.1}%", value, bar, pct);
     }
 
     println!();
@@ -133,10 +133,78 @@ fn print_cumulative_histogram(result: &diceman::SimResult, lte: bool) {
     let max_bar_width = 40;
 
     for (value, pct) in &cumulative {
-        let bar_width = (pct * max_bar_width as f64) as usize;
-        let bar: String = "█".repeat(bar_width);
+        let bar = braille_bar(*pct, max_bar_width);
 
-        println!("{:>4}: {:40} {:5.1}%", value, bar, pct * 100.0);
+        println!("{:>4}: {} {:5.1}%", value, bar, pct * 100.0);
+    }
+}
+
+/// Renders a horizontal bar using braille characters for 2x resolution.
+/// `fraction` is 0.0..=1.0, `width` is the character width of the bar area.
+fn braille_bar(fraction: f64, width: usize) -> String {
+    let half_steps = (fraction.clamp(0.0, 1.0) * (width * 2) as f64).round() as usize;
+    let full_chars = half_steps / 2;
+    let has_half = half_steps % 2 == 1;
+
+    let mut bar = String::with_capacity(width * 3);
+    for _ in 0..full_chars {
+        bar.push('⣿');
+    }
+    if has_half {
+        bar.push('⡇');
+    }
+    let filled = full_chars + if has_half { 1 } else { 0 };
+    for _ in filled..width {
+        bar.push(' ');
+    }
+    bar
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn braille_bar_empty() {
+        let bar = braille_bar(0.0, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert!(bar.chars().all(|c| c == ' '));
+    }
+
+    #[test]
+    fn braille_bar_full() {
+        let bar = braille_bar(1.0, 10);
+        assert_eq!(bar.chars().count(), 10);
+        assert!(bar.chars().all(|c| c == '⣿'));
+    }
+
+    #[test]
+    fn braille_bar_half_step() {
+        // 1 out of 20 half-steps = left column of first cell only
+        let bar = braille_bar(0.05, 10);
+        assert_eq!(bar.chars().count(), 10);
+        let chars: Vec<char> = bar.chars().collect();
+        assert_eq!(chars[0], '⡇');
+        assert!(chars[1..].iter().all(|&c| c == ' '));
+    }
+
+    #[test]
+    fn braille_bar_exact_half() {
+        let bar = braille_bar(0.5, 10);
+        assert_eq!(bar.chars().count(), 10);
+        let chars: Vec<char> = bar.chars().collect();
+        // 5 full braille chars, 5 spaces
+        assert!(chars[..5].iter().all(|&c| c == '⣿'));
+        assert!(chars[5..].iter().all(|&c| c == ' '));
+    }
+
+    #[test]
+    fn braille_bar_constant_width() {
+        // Any fraction should produce exactly `width` characters
+        for pct in 0..=100 {
+            let bar = braille_bar(pct as f64 / 100.0, 20);
+            assert_eq!(bar.chars().count(), 20, "failed at {}%", pct);
+        }
     }
 }
 
