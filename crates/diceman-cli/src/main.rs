@@ -169,7 +169,7 @@ fn braille_bar(fraction: f64, width: usize) -> String {
     }
     let filled = full_chars + if has_half { 1 } else { 0 };
     for _ in filled..width {
-        bar.push(' ');
+        bar.push('⠀');
     }
     bar
 }
@@ -223,7 +223,7 @@ mod tests {
     fn braille_bar_empty() {
         let bar = braille_bar(0.0, 10);
         assert_eq!(bar.chars().count(), 10);
-        assert!(bar.chars().all(|c| c == ' '));
+        assert!(bar.chars().all(|c| c == '⠀'));
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(bar.chars().count(), 10);
         let chars: Vec<char> = bar.chars().collect();
         assert_eq!(chars[0], '⡇');
-        assert!(chars[1..].iter().all(|&c| c == ' '));
+        assert!(chars[1..].iter().all(|&c| c == '⠀'));
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
         let chars: Vec<char> = bar.chars().collect();
         // 5 full braille chars, 5 spaces
         assert!(chars[..5].iter().all(|&c| c == '⣿'));
-        assert!(chars[5..].iter().all(|&c| c == ' '));
+        assert!(chars[5..].iter().all(|&c| c == '⠀'));
     }
 
     #[test]
