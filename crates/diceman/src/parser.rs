@@ -97,6 +97,7 @@ impl<'a> Parser<'a> {
         match &self.current {
             Token::Number(_) => self.roll_or_number(),
             Token::D => self.roll_or_number(),
+            Token::DigitD => self.digit_roll(),
             Token::LParen => {
                 self.advance()?;
                 let expr = self.expression()?;
@@ -159,6 +160,50 @@ impl<'a> Parser<'a> {
             crit_success,
             crit_failure,
         }))
+    }
+
+    /// Parse a digit dice roll (D66, D666, D44, etc.).
+    fn digit_roll(&mut self) -> Result<Expr> {
+        // Consume the 'D'
+        self.advance()?;
+
+        // Read the number after D
+        let value = if let Token::Number(n) = self.current {
+            self.advance()?;
+            n
+        } else {
+            return Err(Error::Expected {
+                expected: "number after 'D' for digit dice".to_string(),
+                found: format!("{:?}", self.current),
+            });
+        };
+
+        // Decompose into digits and validate all are the same
+        let (sides, count) = Self::decompose_digit_dice(value)?;
+
+        Ok(Expr::DigitRoll { sides, count })
+    }
+
+    /// Decompose a digit dice value into (sides, count).
+    /// All digits must be the same (e.g., 66 → (6, 2), 444 → (4, 3)).
+    fn decompose_digit_dice(value: u32) -> Result<(u32, u32)> {
+        if value == 0 {
+            return Err(Error::InvalidDigitDice(value));
+        }
+
+        let mut digits = Vec::new();
+        let mut n = value;
+        while n > 0 {
+            digits.push(n % 10);
+            n /= 10;
+        }
+
+        let first = digits[0];
+        if first == 0 || !digits.iter().all(|&d| d == first) {
+            return Err(Error::InvalidDigitDice(value));
+        }
+
+        Ok((first, digits.len() as u32))
     }
 
     /// Parse dice sides (number, %, or F).
@@ -929,6 +974,63 @@ mod tests {
     fn test_crit_failure_with_success_counting_error() {
         let err = parse("5d10>=8cf1").unwrap_err();
         assert!(matches!(err, Error::CritWithSuccessCounting));
+    }
+
+    #[test]
+    fn test_parse_digit_dice_d66() {
+        let expr = parse("D66").unwrap();
+        assert_eq!(
+            expr,
+            Expr::DigitRoll { sides: 6, count: 2 }
+        );
+    }
+
+    #[test]
+    fn test_parse_digit_dice_d666() {
+        let expr = parse("D666").unwrap();
+        assert_eq!(
+            expr,
+            Expr::DigitRoll { sides: 6, count: 3 }
+        );
+    }
+
+    #[test]
+    fn test_parse_digit_dice_d44() {
+        let expr = parse("D44").unwrap();
+        assert_eq!(
+            expr,
+            Expr::DigitRoll { sides: 4, count: 2 }
+        );
+    }
+
+    #[test]
+    fn test_parse_digit_dice_d88() {
+        let expr = parse("D88").unwrap();
+        assert_eq!(
+            expr,
+            Expr::DigitRoll { sides: 8, count: 2 }
+        );
+    }
+
+    #[test]
+    fn test_parse_digit_dice_single_d6() {
+        let expr = parse("D6").unwrap();
+        assert_eq!(
+            expr,
+            Expr::DigitRoll { sides: 6, count: 1 }
+        );
+    }
+
+    #[test]
+    fn test_parse_digit_dice_invalid_mixed_digits() {
+        let err = parse("D46").unwrap_err();
+        assert!(matches!(err, Error::InvalidDigitDice(46)));
+    }
+
+    #[test]
+    fn test_parse_digit_dice_invalid_d123() {
+        let err = parse("D123").unwrap_err();
+        assert!(matches!(err, Error::InvalidDigitDice(123)));
     }
 
     #[test]

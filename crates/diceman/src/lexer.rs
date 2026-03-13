@@ -8,8 +8,10 @@ use crate::error::{Error, Result};
 pub enum Token {
     /// A numeric literal.
     Number(u32),
-    /// The 'd' or 'D' dice separator.
+    /// The 'd' dice separator (lowercase, standard roll).
     D,
+    /// The 'D' dice separator (uppercase, digit dice like D66).
+    DigitD,
     /// Percent sign for d%.
     Percent,
     /// 'F' for fudge dice.
@@ -99,9 +101,13 @@ impl<'a> Lexer<'a> {
 
         match ch {
             '0'..='9' => self.number(),
-            'd' | 'D' => {
+            'd' => {
                 self.chars.next();
                 Ok(Token::D)
+            }
+            'D' => {
+                self.chars.next();
+                Ok(Token::DigitD)
             }
             '%' => {
                 self.chars.next();
@@ -323,6 +329,28 @@ mod tests {
         } else {
             panic!("Expected UnexpectedChar error");
         }
+    }
+
+    #[test]
+    fn test_lowercase_d_token() {
+        let mut lexer = Lexer::new("d6");
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
+    }
+
+    #[test]
+    fn test_uppercase_d_token() {
+        let mut lexer = Lexer::new("D66");
+        assert_eq!(lexer.next_token().unwrap(), Token::DigitD);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(66));
+    }
+
+    #[test]
+    fn test_mixed_case_expression() {
+        let mut lexer = Lexer::new("2d6");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(2));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
     }
 
     #[test]
