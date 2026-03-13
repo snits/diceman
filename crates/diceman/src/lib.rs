@@ -148,6 +148,28 @@ mod tests {
     }
 
     #[test]
+    fn test_digit_dice_integration() {
+        // D66 should produce values from 11-66 with no 7-9 or 0 digits
+        let result = roll("D66").unwrap();
+        assert!(result.total >= 11 && result.total <= 66);
+        // Each digit should be 1-6
+        let tens = result.total / 10;
+        let ones = result.total % 10;
+        assert!((1..=6).contains(&tens));
+        assert!((1..=6).contains(&ones));
+    }
+
+    #[test]
+    fn test_digit_dice_simulation() {
+        let result = simulate("D66", 10000).unwrap();
+        assert!(result.min >= 11);
+        assert!(result.max <= 66);
+        // D66 has 36 outcomes, mean should be around 38.5
+        // (average of 1-6 for tens = 3.5, for ones = 3.5, so 35 + 3.5 = 38.5)
+        assert!((result.mean - 38.5).abs() < 1.0);
+    }
+
+    #[test]
     fn test_crit_markers_integration() {
         // Test RNG that returns deterministic values
         struct TestRng {

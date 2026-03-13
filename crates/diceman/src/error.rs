@@ -34,6 +34,9 @@ pub enum Error {
 
     #[error("Critical markers cannot be combined with success counting")]
     CritWithSuccessCounting,
+
+    #[error("Invalid digit dice value: {0} (all digits must be the same, e.g., D66, D444, D88)")]
+    InvalidDigitDice(u32),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

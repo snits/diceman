@@ -118,6 +118,7 @@ impl<R: Rng> Evaluator<'_, R> {
                     expression,
                 })
             }
+            Expr::DigitRoll { sides, count } => self.evaluate_digit_roll(*sides, *count),
             Expr::Group(inner) => {
                 let result = self.evaluate(inner)?;
                 Ok(RollResult {
@@ -127,6 +128,39 @@ impl<R: Rng> Evaluator<'_, R> {
                 })
             }
         }
+    }
+
+    fn evaluate_digit_roll(&mut self, sides: u32, count: u32) -> Result<RollResult> {
+        let dice: Vec<DieResult> = (0..count)
+            .map(|_| {
+                let value = self.rng.roll(sides) as i64;
+                DieResult {
+                    value,
+                    rolls: vec![value],
+                    dropped: false,
+                    is_crit_success: false,
+                    is_crit_failure: false,
+                }
+            })
+            .collect();
+
+        // Concatenate die values as digits to form the total
+        let total: i64 = dice.iter().fold(0i64, |acc, d| acc * 10 + d.value);
+
+        // Format as D66[3, 5] = 35
+        let sides_str = std::iter::repeat_n(sides.to_string(), count as usize).collect::<String>();
+        let dice_str = dice
+            .iter()
+            .map(|d| d.value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let expression = format!("D{}[{}] = {}", sides_str, dice_str, total);
+
+        Ok(RollResult {
+            total,
+            dice,
+            expression,
+        })
     }
 
     fn evaluate_roll(&mut self, roll: &Roll) -> Result<RollResult> {
@@ -913,6 +947,60 @@ mod tests {
         let mut rng = TestRng::new(vec![20, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 21); // 20 + 1, crits don't change value
+    }
+
+    #[test]
+    fn test_evaluate_digit_dice_d66() {
+        let expr = Expr::DigitRoll { sides: 6, count: 2 };
+        let mut rng = TestRng::new(vec![3, 5]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 35); // digits: 3, 5 → 35
+        assert_eq!(result.dice.len(), 2);
+        assert_eq!(result.expression, "D66[3, 5] = 35");
+    }
+
+    #[test]
+    fn test_evaluate_digit_dice_d666() {
+        let expr = Expr::DigitRoll { sides: 6, count: 3 };
+        let mut rng = TestRng::new(vec![1, 4, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 146); // digits: 1, 4, 6 → 146
+        assert_eq!(result.dice.len(), 3);
+        assert_eq!(result.expression, "D666[1, 4, 6] = 146");
+    }
+
+    #[test]
+    fn test_evaluate_digit_dice_d44() {
+        let expr = Expr::DigitRoll { sides: 4, count: 2 };
+        let mut rng = TestRng::new(vec![2, 3]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 23);
+        assert_eq!(result.expression, "D44[2, 3] = 23");
+    }
+
+    #[test]
+    fn test_evaluate_digit_dice_single() {
+        let expr = Expr::DigitRoll { sides: 6, count: 1 };
+        let mut rng = TestRng::new(vec![4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 4);
+        assert_eq!(result.expression, "D6[4] = 4");
+    }
+
+    #[test]
+    fn test_evaluate_digit_dice_max_d66() {
+        let expr = Expr::DigitRoll { sides: 6, count: 2 };
+        let mut rng = TestRng::new(vec![6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 66);
+    }
+
+    #[test]
+    fn test_evaluate_digit_dice_min_d66() {
+        let expr = Expr::DigitRoll { sides: 6, count: 2 };
+        let mut rng = TestRng::new(vec![1, 1]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 11);
     }
 
     #[test]

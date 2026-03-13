@@ -16,6 +16,13 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    /// A digit dice roll (e.g., D66 = roll 2d6, read as two-digit number).
+    DigitRoll {
+        /// Number of sides on each die.
+        sides: u32,
+        /// Number of dice (digits) to roll.
+        count: u32,
+    },
     /// A parenthesized group.
     Group(Box<Expr>),
 }
