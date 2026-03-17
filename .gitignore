@@ -34,3 +34,4 @@ session-handoff.md
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+.devcontainer/local.env
