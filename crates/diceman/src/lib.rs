@@ -97,6 +97,26 @@ pub fn parse(input: &str) -> Result<Expr> {
 mod tests {
     use super::*;
 
+    /// Deterministic RNG for testing with pre-defined values.
+    struct TestRng {
+        values: Vec<u32>,
+        index: usize,
+    }
+
+    impl TestRng {
+        fn new(values: Vec<u32>) -> Self {
+            Self { values, index: 0 }
+        }
+    }
+
+    impl Rng for TestRng {
+        fn roll(&mut self, _max: u32) -> u32 {
+            let value = self.values[self.index % self.values.len()];
+            self.index += 1;
+            value
+        }
+    }
+
     #[test]
     fn test_roll_basic() {
         let result = roll("2d6").unwrap();
@@ -171,24 +191,6 @@ mod tests {
 
     #[test]
     fn test_crit_markers_integration() {
-        // Test RNG that returns deterministic values
-        struct TestRng {
-            values: Vec<u32>,
-            index: usize,
-        }
-        impl TestRng {
-            fn new(values: Vec<u32>) -> Self {
-                Self { values, index: 0 }
-            }
-        }
-        impl Rng for TestRng {
-            fn roll(&mut self, _max: u32) -> u32 {
-                let value = self.values[self.index % self.values.len()];
-                self.index += 1;
-                value
-            }
-        }
-
         // Test crit success marker
         let mut rng = TestRng::new(vec![20]);
         let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
@@ -228,5 +230,62 @@ mod tests {
             "Expected crit success marker ** for 19 in expanded range: {}",
             result.expression
         );
+    }
+
+    // --- Deterministic end-to-end tests ---
+
+    #[test]
+    fn test_e2e_reroll_keep_highest() {
+        // 4d6rkh3: roll 4d6, reroll 1s, keep highest 3
+        // Rolls: die0=1 (rerolled→4), die1=5, die2=3, die3=6
+        // After reroll: [4, 5, 3, 6], keep highest 3: 6+5+4=15
+        let mut rng = TestRng::new(vec![1, 5, 3, 6, 4]);
+        let result = roll_with_rng("4d6rkh3", &mut rng).unwrap();
+        assert_eq!(result.total, 15);
+    }
+
+    #[test]
+    fn test_e2e_explode_keep() {
+        // 2d6!kh2: roll 2d6, explode on 6, keep highest 2
+        // Rolls: die0=6 (explodes→new die=4), die1=3
+        // Dice: [6, 3, 4], keep highest 2: 6+4=10
+        let mut rng = TestRng::new(vec![6, 3, 4]);
+        let result = roll_with_rng("2d6!kh2", &mut rng).unwrap();
+        assert_eq!(result.total, 10);
+    }
+
+    #[test]
+    fn test_e2e_arithmetic_with_rolls() {
+        // 2d6 + 1d4 * 2: arithmetic with standard precedence
+        // Rolls: 2d6→[3, 4], 1d4→[2]
+        // Total: (3+4) + (2*2) = 11
+        let mut rng = TestRng::new(vec![3, 4, 2]);
+        let result = roll_with_rng("2d6 + 1d4 * 2", &mut rng).unwrap();
+        assert_eq!(result.total, 11);
+    }
+
+    #[test]
+    fn test_e2e_negative_number() {
+        // -5: unary negation (parsed as 0 - 5)
+        let mut rng = TestRng::new(vec![1]); // won't be used
+        let result = roll_with_rng("-5", &mut rng).unwrap();
+        assert_eq!(result.total, -5);
+    }
+
+    #[test]
+    fn test_e2e_grouped_expression() {
+        // (1d6 + 2) * 3: grouped arithmetic
+        // Rolls: 1d6→[4]
+        // Total: (4+2)*3 = 18
+        let mut rng = TestRng::new(vec![4]);
+        let result = roll_with_rng("(1d6 + 2) * 3", &mut rng).unwrap();
+        assert_eq!(result.total, 18);
+    }
+
+    #[test]
+    fn test_e2e_parse_error() {
+        // Empty string should produce a parse error
+        let err = roll("").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
     }
 }
