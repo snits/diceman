@@ -30,6 +30,7 @@
 
 pub mod ast;
 pub mod error;
+mod format;
 pub mod lexer;
 pub mod parser;
 pub mod roller;
