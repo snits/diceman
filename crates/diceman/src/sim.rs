@@ -3,7 +3,7 @@
 
 use crate::error::Result;
 use crate::parser;
-use crate::roller::{evaluate_with_rng, FastRng};
+use crate::roller::{evaluate_with_rng, FastRng, Rng};
 use std::collections::HashMap;
 
 /// Result of a Monte Carlo simulation.
@@ -107,44 +107,16 @@ impl SimResult {
 /// # Returns
 /// A `SimResult` containing the distribution and statistics.
 pub fn simulate(expr: &str, n: usize) -> Result<SimResult> {
-    let parsed = parser::parse(expr)?;
-    let mut rng = FastRng::new();
-
-    let mut distribution: HashMap<i64, usize> = HashMap::new();
-    let mut sum: i64 = 0;
-    let mut sum_sq: i64 = 0;
-    let mut min = i64::MAX;
-    let mut max = i64::MIN;
-
-    for _ in 0..n {
-        let result = evaluate_with_rng(&parsed, &mut rng)?;
-        let total = result.total;
-
-        *distribution.entry(total).or_insert(0) += 1;
-        sum += total;
-        sum_sq += total * total;
-        min = min.min(total);
-        max = max.max(total);
-    }
-
-    let mean = sum as f64 / n as f64;
-    let variance = (sum_sq as f64 / n as f64) - (mean * mean);
-    let std_dev = variance.sqrt();
-
-    Ok(SimResult {
-        distribution,
-        min,
-        max,
-        mean,
-        std_dev,
-        n,
-    })
+    simulate_with_rng(expr, n, &mut FastRng::new())
 }
 
 /// Run a simulation with a seeded RNG for reproducibility.
 pub fn simulate_seeded(expr: &str, n: usize, seed: u64) -> Result<SimResult> {
+    simulate_with_rng(expr, n, &mut FastRng::with_seed(seed))
+}
+
+fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResult> {
     let parsed = parser::parse(expr)?;
-    let mut rng = FastRng::with_seed(seed);
 
     let mut distribution: HashMap<i64, usize> = HashMap::new();
     let mut sum: i64 = 0;
@@ -153,7 +125,7 @@ pub fn simulate_seeded(expr: &str, n: usize, seed: u64) -> Result<SimResult> {
     let mut max = i64::MIN;
 
     for _ in 0..n {
-        let result = evaluate_with_rng(&parsed, &mut rng)?;
+        let result = evaluate_with_rng(&parsed, rng)?;
         let total = result.total;
 
         *distribution.entry(total).or_insert(0) += 1;
