@@ -3,7 +3,7 @@
 
 use crate::error::Result;
 use crate::parser;
-use crate::roller::{evaluate_with_rng, FastRng, Rng};
+use crate::roller::{evaluate_total, FastRng, Rng};
 use std::collections::HashMap;
 
 /// Result of a Monte Carlo simulation.
@@ -125,8 +125,7 @@ fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResu
     let mut max = i64::MIN;
 
     for _ in 0..n {
-        let result = evaluate_with_rng(&parsed, rng)?;
-        let total = result.total;
+        let total = evaluate_total(&parsed, rng)?;
 
         *distribution.entry(total).or_insert(0) += 1;
         sum += total;
