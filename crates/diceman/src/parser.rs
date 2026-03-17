@@ -1038,4 +1038,52 @@ mod tests {
         let err = parse("5d10>=8cs10cf1").unwrap_err();
         assert!(matches!(err, Error::CritWithSuccessCounting));
     }
+
+    #[test]
+    fn test_parse_empty_input() {
+        let err = parse("").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_missing_dice_sides() {
+        let err = parse("2d").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_unclosed_parenthesis() {
+        let err = parse("(2d6 + 3").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_missing_right_operand() {
+        let err = parse("2d6 +").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_trailing_garbage_invalid_chars() {
+        let err = parse("2d6 abc").unwrap_err();
+        assert!(matches!(err, Error::UnexpectedChar(..)));
+    }
+
+    #[test]
+    fn test_parse_trailing_garbage_valid_token() {
+        let err = parse("2d6 3").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_invalid_character() {
+        let err = parse("2d6 @ 3").unwrap_err();
+        assert!(matches!(err, Error::UnexpectedChar(..)));
+    }
+
+    #[test]
+    fn test_parse_bare_d_no_sides() {
+        let err = parse("d").unwrap_err();
+        assert!(matches!(err, Error::Expected { .. }));
+    }
 }
