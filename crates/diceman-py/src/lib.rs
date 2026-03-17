@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// Result of a dice roll.
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct RollResult {
     #[pyo3(get)]
@@ -28,7 +28,7 @@ impl RollResult {
 }
 
 /// Result of a Monte Carlo simulation.
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct SimResult {
     #[pyo3(get)]
