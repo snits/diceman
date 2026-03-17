@@ -1152,6 +1152,86 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_keep_lowest() {
+        let roll = Roll {
+            count: 4,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::KeepLowest(1)],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![2, 5, 3, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 2); // Keep lowest: 2
+        assert_eq!(result.dice.iter().filter(|d| d.dropped).count(), 3);
+    }
+
+    #[test]
+    fn test_evaluate_keep_lowest_all() {
+        let roll = Roll {
+            count: 2,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::KeepLowest(5)], // Keep more than rolled
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![3, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 7); // All kept
+    }
+
+    #[test]
+    fn test_evaluate_percent_dice() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Percent,
+            modifiers: vec![],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![42]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 42);
+    }
+
+    #[test]
+    fn test_evaluate_percent_dice_max() {
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Percent,
+            modifiers: vec![],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![100]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 100);
+    }
+
+    #[test]
+    fn test_evaluate_negative_number() {
+        let expr = Expr::BinOp {
+            op: Op::Sub,
+            left: Box::new(Expr::Number(0)),
+            right: Box::new(Expr::Number(5)),
+        };
+        let result = evaluate(&expr).unwrap();
+        assert_eq!(result.total, -5);
+    }
+
+    #[test]
+    fn test_evaluate_group() {
+        let expr = Expr::Group(Box::new(Expr::Number(42)));
+        let result = evaluate(&expr).unwrap();
+        assert_eq!(result.total, 42);
+        assert!(result.expression.contains("(42)"));
+    }
+
+    #[test]
     fn test_explode_limit() {
         // 1d6!! (compounding) with TestRng always returning 6 — should hit explode limit
         let roll = Roll {
