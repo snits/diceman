@@ -45,29 +45,34 @@ pub struct SimResult {
     pub n: usize,
 }
 
+impl SimResult {
+    fn to_core(&self) -> core::SimResult {
+        core::SimResult {
+            distribution: self.distribution.clone(),
+            min: self.min,
+            max: self.max,
+            mean: self.mean,
+            std_dev: self.std_dev,
+            n: self.n,
+        }
+    }
+}
+
 #[pymethods]
 impl SimResult {
     /// Get the mode (most common outcome).
     fn mode(&self) -> Option<i64> {
-        self.distribution
-            .iter()
-            .max_by_key(|(_, &count)| count)
-            .map(|(&value, _)| value)
+        self.to_core().mode()
     }
 
     /// Get outcomes sorted by value (for plotting).
     fn sorted_outcomes(&self) -> Vec<(i64, usize)> {
-        let mut outcomes: Vec<_> = self.distribution.iter().map(|(&k, &v)| (k, v)).collect();
-        outcomes.sort_by_key(|(k, _)| *k);
-        outcomes
+        self.to_core().sorted_outcomes()
     }
 
     /// Get probability of each outcome.
     fn probabilities(&self) -> HashMap<i64, f64> {
-        self.distribution
-            .iter()
-            .map(|(&k, &v)| (k, v as f64 / self.n as f64))
-            .collect()
+        self.to_core().probabilities()
     }
 
     fn __repr__(&self) -> String {
