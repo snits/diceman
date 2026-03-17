@@ -1030,4 +1030,144 @@ mod tests {
         let crit_die = result.dice.iter().find(|d| d.value == 6).unwrap();
         assert!(crit_die.is_crit_success);
     }
+
+    // --- Reroll evaluation tests ---
+
+    #[test]
+    fn test_reroll_basic() {
+        // 2d6r: default reroll condition is =1
+        // Rolls: 1 (rerolled), 4 (replacement), 5 (second die, no reroll)
+        let roll = Roll {
+            count: 2,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Reroll {
+                once: false,
+                condition: None, // defaults to =1
+            }],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1, 5, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 9); // 4 (rerolled from 1) + 5
+    }
+
+    #[test]
+    fn test_reroll_once() {
+        // 1d6ro: reroll once, even if replacement still matches
+        // Rolls: 1 (matches =1, reroll), 1 (still matches but once=true, stop)
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Reroll {
+                once: true,
+                condition: None, // defaults to =1
+            }],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1, 1]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 1); // Rerolled once to 1, kept because once=true
+    }
+
+    #[test]
+    fn test_reroll_with_condition() {
+        // 1d6r<3: reroll if value < 3
+        // Rolls: 2 (matches <3, reroll), 4 (does not match, stop)
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Reroll {
+                once: false,
+                condition: Some(Condition {
+                    compare: Compare::LessThan,
+                    value: 3,
+                }),
+            }],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![2, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 4);
+    }
+
+    #[test]
+    fn test_reroll_no_match() {
+        // 2d6r: default condition =1, but no dice roll 1
+        // Rolls: 5, 3 — neither matches =1, no reroll
+        let roll = Roll {
+            count: 2,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Reroll {
+                once: false,
+                condition: None,
+            }],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![5, 3]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.total, 8);
+    }
+
+    // --- Error path tests ---
+
+    #[test]
+    fn test_division_by_zero() {
+        let expr = Expr::BinOp {
+            op: Op::Div,
+            left: Box::new(Expr::Number(10)),
+            right: Box::new(Expr::Number(0)),
+        };
+        let result = evaluate(&expr);
+        assert!(matches!(result, Err(Error::DivisionByZero)));
+    }
+
+    #[test]
+    fn test_reroll_limit() {
+        // 1d6r=1 with TestRng always returning 1 — should hit reroll limit
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Reroll {
+                once: false,
+                condition: Some(Condition {
+                    compare: Compare::Equal,
+                    value: 1,
+                }),
+            }],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![1]); // Wraps around, always returns 1
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::RerollLimit(_))));
+    }
+
+    #[test]
+    fn test_explode_limit() {
+        // 1d6!! (compounding) with TestRng always returning 6 — should hit explode limit
+        let roll = Roll {
+            count: 1,
+            sides: Sides::Number(6),
+            modifiers: vec![Modifier::Explode {
+                compounding: true,
+                penetrating: false,
+                condition: None, // defaults to =max (6)
+            }],
+            crit_success: None,
+            crit_failure: None,
+        };
+        let expr = Expr::Roll(roll);
+        let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
 }
