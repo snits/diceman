@@ -79,12 +79,19 @@ pub fn evaluate(expr: &Expr) -> Result<RollResult> {
 
 /// Evaluate a dice expression with a custom RNG.
 pub fn evaluate_with_rng(expr: &Expr, rng: &mut impl Rng) -> Result<RollResult> {
-    let mut evaluator = Evaluator { rng };
+    let mut evaluator = Evaluator { rng, total_only: false };
     evaluator.evaluate(expr)
+}
+
+/// Evaluate a dice expression, returning only the total (skips expression formatting).
+pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
+    let mut evaluator = Evaluator { rng, total_only: true };
+    Ok(evaluator.evaluate(expr)?.total)
 }
 
 struct Evaluator<'a, R: Rng> {
     rng: &'a mut R,
+    total_only: bool,
 }
 
 impl<R: Rng> Evaluator<'_, R> {
@@ -93,7 +100,7 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::Number(n) => Ok(RollResult {
                 total: *n,
                 dice: vec![],
-                expression: n.to_string(),
+                expression: if self.total_only { String::new() } else { n.to_string() },
             }),
             Expr::Roll(roll) => self.evaluate_roll(roll),
             Expr::BinOp { op, left, right } => {
@@ -110,8 +117,11 @@ impl<R: Rng> Evaluator<'_, R> {
                         left_result.total / right_result.total
                     }
                 };
-                let expression =
-                    format!("{} {} {} = {}", left_result.expression, op, right_result.expression, total);
+                let expression = if self.total_only {
+                    String::new()
+                } else {
+                    format!("{} {} {} = {}", left_result.expression, op, right_result.expression, total)
+                };
                 Ok(RollResult {
                     total,
                     dice: vec![],
@@ -124,7 +134,7 @@ impl<R: Rng> Evaluator<'_, R> {
                 Ok(RollResult {
                     total: result.total,
                     dice: result.dice,
-                    expression: format!("({})", result.expression),
+                    expression: if self.total_only { String::new() } else { format!("({})", result.expression) },
                 })
             }
         }
@@ -147,14 +157,17 @@ impl<R: Rng> Evaluator<'_, R> {
         // Concatenate die values as digits to form the total
         let total: i64 = dice.iter().fold(0i64, |acc, d| acc * 10 + d.value);
 
-        // Format as D66[3, 5] = 35
-        let sides_str = std::iter::repeat_n(sides.to_string(), count as usize).collect::<String>();
-        let dice_str = dice
-            .iter()
-            .map(|d| d.value.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let expression = format!("D{}[{}] = {}", sides_str, dice_str, total);
+        let expression = if self.total_only {
+            String::new()
+        } else {
+            let sides_str = std::iter::repeat_n(sides.to_string(), count as usize).collect::<String>();
+            let dice_str = dice
+                .iter()
+                .map(|d| d.value.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("D{}[{}] = {}", sides_str, dice_str, total)
+        };
 
         Ok(RollResult {
             total,
@@ -198,9 +211,6 @@ impl<R: Rng> Evaluator<'_, R> {
             }
         }
 
-        // Mark critical successes/failures (display-only)
-        self.mark_crits(&mut dice, &roll.crit_success, &roll.crit_failure);
-
         // Calculate total: count successes or sum values
         let total: i64 = if let Some(condition) = success_condition {
             dice.iter()
@@ -211,8 +221,13 @@ impl<R: Rng> Evaluator<'_, R> {
             dice.iter().filter(|d| !d.dropped).map(|d| d.value).sum()
         };
 
-        // Format the expression
-        let expression = self.format_roll(roll, &dice, total, success_condition);
+        let expression = if self.total_only {
+            String::new()
+        } else {
+            // Mark critical successes/failures (display-only)
+            self.mark_crits(&mut dice, &roll.crit_success, &roll.crit_failure);
+            self.format_roll(roll, &dice, total, success_condition)
+        };
 
         Ok(RollResult {
             total,
