@@ -35,3 +35,7 @@ session-handoff.md
 .dolt/
 *.db
 .devcontainer/local.env
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
+.beads/
