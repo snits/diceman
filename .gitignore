@@ -34,11 +34,11 @@ session-handoff.md
 # Dolt database files (added by bd init)
 .dolt/
 *.db
-.devcontainer/local.env
+.devcontainer
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
-.beads/
-.claude/
-
-/.scratchpad/
+.beads
+.claude
+.worktrees
+.scratchpad
