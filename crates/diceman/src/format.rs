@@ -35,7 +35,11 @@ pub(crate) fn format_roll(
             Modifier::KeepLowest(n) => format!("kl{}", n),
             Modifier::DropHighest(n) => format!("dh{}", n),
             Modifier::DropLowest(n) => format!("dl{}", n),
-            Modifier::Explode { compounding, penetrating, condition } => {
+            Modifier::Explode {
+                compounding,
+                penetrating,
+                condition,
+            } => {
                 let mut s = "!".to_string();
                 if *compounding {
                     s.push('!');

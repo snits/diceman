@@ -2,6 +2,13 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
+## Project Scale Context
+
+- **User count and tool type:** Small developer-facing library and CLI for dice notation parsing, rolling, and simulation.
+- **Codebase size and complexity:** Compact Rust workspace with a core crate plus CLI and Python bindings; prefer direct, readable changes over framework-heavy abstractions.
+- **Process overhead expectations:** Use beads for durable task tracking and tests for behavior changes; keep design artifacts and review proportional to a small library.
+- **Default approach:** Pragmatic, minimal, and API-stability-conscious. Add extensibility only when it preserves a clear public boundary.
+
 ## Quick Reference
 
 ```bash

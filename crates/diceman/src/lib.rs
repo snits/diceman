@@ -38,7 +38,7 @@ pub mod sim;
 
 pub use ast::{Compare, Condition, Expr, Modifier, Op, Roll, Sides};
 pub use error::{Error, Result};
-pub use roller::{DieResult, FastRng, Rng, RollResult};
+pub use roller::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
 pub use sim::{simulate, simulate_seeded, SimResult};
 
 /// Parse and roll a dice expression in one step.
@@ -145,6 +145,17 @@ mod tests {
         let result2 = roll_with_rng("2d6", &mut rng).unwrap();
 
         assert_eq!(result1.total, result2.total);
+    }
+
+    #[test]
+    fn rng_checkpoint_is_available_from_crate_root() {
+        let mut rng = FastRng::with_seed(123);
+        let checkpoint: RngCheckpoint = rng.checkpoint();
+        let expected = rng.roll(6);
+
+        rng.restore(checkpoint);
+
+        assert_eq!(rng.roll(6), expected);
     }
 
     #[test]

@@ -148,7 +148,9 @@ impl<'a> Parser<'a> {
         let (crit_success, crit_failure) = self.crit_markers()?;
 
         // Validate: cs/cf cannot combine with success counting
-        let has_success_counting = modifiers.iter().any(|m| matches!(m, Modifier::CountSuccesses(_)));
+        let has_success_counting = modifiers
+            .iter()
+            .any(|m| matches!(m, Modifier::CountSuccesses(_)));
         if has_success_counting && (crit_success.is_some() || crit_failure.is_some()) {
             return Err(Error::CritWithSuccessCounting);
         }
@@ -338,7 +340,11 @@ impl<'a> Parser<'a> {
 
         let condition = self.optional_condition()?;
 
-        Ok(Modifier::Explode { compounding, penetrating, condition })
+        Ok(Modifier::Explode {
+            compounding,
+            penetrating,
+            condition,
+        })
     }
 
     /// Parse a reroll modifier (r, ro, r<3).
@@ -979,46 +985,31 @@ mod tests {
     #[test]
     fn test_parse_digit_dice_d66() {
         let expr = parse("D66").unwrap();
-        assert_eq!(
-            expr,
-            Expr::DigitRoll { sides: 6, count: 2 }
-        );
+        assert_eq!(expr, Expr::DigitRoll { sides: 6, count: 2 });
     }
 
     #[test]
     fn test_parse_digit_dice_d666() {
         let expr = parse("D666").unwrap();
-        assert_eq!(
-            expr,
-            Expr::DigitRoll { sides: 6, count: 3 }
-        );
+        assert_eq!(expr, Expr::DigitRoll { sides: 6, count: 3 });
     }
 
     #[test]
     fn test_parse_digit_dice_d44() {
         let expr = parse("D44").unwrap();
-        assert_eq!(
-            expr,
-            Expr::DigitRoll { sides: 4, count: 2 }
-        );
+        assert_eq!(expr, Expr::DigitRoll { sides: 4, count: 2 });
     }
 
     #[test]
     fn test_parse_digit_dice_d88() {
         let expr = parse("D88").unwrap();
-        assert_eq!(
-            expr,
-            Expr::DigitRoll { sides: 8, count: 2 }
-        );
+        assert_eq!(expr, Expr::DigitRoll { sides: 8, count: 2 });
     }
 
     #[test]
     fn test_parse_digit_dice_single_d6() {
         let expr = parse("D6").unwrap();
-        assert_eq!(
-            expr,
-            Expr::DigitRoll { sides: 6, count: 1 }
-        );
+        assert_eq!(expr, Expr::DigitRoll { sides: 6, count: 1 });
     }
 
     #[test]
