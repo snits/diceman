@@ -15,6 +15,25 @@ pub trait Rng {
     fn roll(&mut self, max: u32) -> u32;
 }
 
+/// Persistable checkpoint for a random number generator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RngCheckpoint {
+    state: u64,
+}
+
+impl RngCheckpoint {
+    /// Create a checkpoint from a previously persisted state value.
+    pub fn from_state(state: u64) -> Self {
+        Self { state }
+    }
+
+    /// Return the persistable state value for this checkpoint.
+    pub fn state(self) -> u64 {
+        self.state
+    }
+}
+
 /// Default RNG using fastrand.
 pub struct FastRng(fastrand::Rng);
 
@@ -25,6 +44,16 @@ impl FastRng {
 
     pub fn with_seed(seed: u64) -> Self {
         Self(fastrand::Rng::with_seed(seed))
+    }
+
+    pub fn checkpoint(&self) -> RngCheckpoint {
+        RngCheckpoint {
+            state: self.0.get_seed(),
+        }
+    }
+
+    pub fn restore(&mut self, checkpoint: RngCheckpoint) {
+        self.0.seed(checkpoint.state);
     }
 }
 
@@ -75,13 +104,19 @@ pub fn evaluate(expr: &Expr) -> Result<RollResult> {
 
 /// Evaluate a dice expression with a custom RNG.
 pub fn evaluate_with_rng(expr: &Expr, rng: &mut impl Rng) -> Result<RollResult> {
-    let mut evaluator = Evaluator { rng, total_only: false };
+    let mut evaluator = Evaluator {
+        rng,
+        total_only: false,
+    };
     evaluator.evaluate(expr)
 }
 
 /// Evaluate a dice expression, returning only the total (skips expression formatting).
 pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
-    let mut evaluator = Evaluator { rng, total_only: true };
+    let mut evaluator = Evaluator {
+        rng,
+        total_only: true,
+    };
     Ok(evaluator.evaluate(expr)?.total)
 }
 
@@ -96,7 +131,11 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::Number(n) => Ok(RollResult {
                 total: *n,
                 dice: vec![],
-                expression: if self.total_only { String::new() } else { n.to_string() },
+                expression: if self.total_only {
+                    String::new()
+                } else {
+                    n.to_string()
+                },
             }),
             Expr::Roll(roll) => self.evaluate_roll(roll),
             Expr::BinOp { op, left, right } => {
@@ -116,7 +155,10 @@ impl<R: Rng> Evaluator<'_, R> {
                 let expression = if self.total_only {
                     String::new()
                 } else {
-                    format!("{} {} {} = {}", left_result.expression, op, right_result.expression, total)
+                    format!(
+                        "{} {} {} = {}",
+                        left_result.expression, op, right_result.expression, total
+                    )
                 };
                 Ok(RollResult {
                     total,
@@ -130,7 +172,11 @@ impl<R: Rng> Evaluator<'_, R> {
                 Ok(RollResult {
                     total: result.total,
                     dice: result.dice,
-                    expression: if self.total_only { String::new() } else { format!("({})", result.expression) },
+                    expression: if self.total_only {
+                        String::new()
+                    } else {
+                        format!("({})", result.expression)
+                    },
                 })
             }
         }
@@ -156,7 +202,8 @@ impl<R: Rng> Evaluator<'_, R> {
         let expression = if self.total_only {
             String::new()
         } else {
-            let sides_str = std::iter::repeat_n(sides.to_string(), count as usize).collect::<String>();
+            let sides_str =
+                std::iter::repeat_n(sides.to_string(), count as usize).collect::<String>();
             let dice_str = dice
                 .iter()
                 .map(|d| d.value.to_string())
@@ -194,8 +241,18 @@ impl<R: Rng> Evaluator<'_, R> {
                 Modifier::Reroll { once, condition } => {
                     self.apply_reroll(&mut dice, &roll.sides, *once, condition.as_ref())?;
                 }
-                Modifier::Explode { compounding, penetrating, condition } => {
-                    self.apply_explode(&mut dice, &roll.sides, *compounding, *penetrating, condition.as_ref())?;
+                Modifier::Explode {
+                    compounding,
+                    penetrating,
+                    condition,
+                } => {
+                    self.apply_explode(
+                        &mut dice,
+                        &roll.sides,
+                        *compounding,
+                        *penetrating,
+                        condition.as_ref(),
+                    )?;
                 }
                 Modifier::KeepHighest(n) => self.apply_keep_highest(&mut dice, *n),
                 Modifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
@@ -310,7 +367,11 @@ impl<R: Rng> Evaluator<'_, R> {
                 let new_value = self.roll_die(sides);
 
                 // Penetrating: subtract 1 from added value (not from check)
-                let added_value = if penetrating { new_value - 1 } else { new_value };
+                let added_value = if penetrating {
+                    new_value - 1
+                } else {
+                    new_value
+                };
 
                 if compounding {
                     // Compounding: add to same die
@@ -432,7 +493,6 @@ impl<R: Rng> Evaluator<'_, R> {
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -457,6 +517,37 @@ mod tests {
             self.index += 1;
             value
         }
+    }
+
+    #[test]
+    fn fast_rng_restore_repeats_rolls_after_checkpoint() {
+        let mut rng = FastRng::with_seed(42);
+
+        let _before_checkpoint = rng.roll(20);
+        let checkpoint = rng.checkpoint();
+
+        let first_after_checkpoint = rng.roll(20);
+        let _advanced = rng.roll(20);
+
+        rng.restore(checkpoint);
+
+        assert_eq!(rng.roll(20), first_after_checkpoint);
+    }
+
+    #[test]
+    fn rng_checkpoint_rebuilds_from_persisted_state() {
+        let mut rng = FastRng::with_seed(99);
+
+        let _before_checkpoint = rng.roll(12);
+        let checkpoint = rng.checkpoint();
+        let persisted_state = checkpoint.state();
+
+        let first_after_checkpoint = rng.roll(12);
+
+        let rebuilt = RngCheckpoint::from_state(persisted_state);
+        rng.restore(rebuilt);
+
+        assert_eq!(rng.roll(12), first_after_checkpoint);
     }
 
     #[test]
@@ -612,7 +703,7 @@ mod tests {
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert!(result.expression.contains("successes"));
         assert!(result.expression.contains("10*")); // Success marked
-        assert!(result.expression.contains("8*"));  // Success marked
+        assert!(result.expression.contains("8*")); // Success marked
     }
 
     #[test]
@@ -1161,7 +1252,7 @@ mod tests {
 
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::{DieResult, RollResult};
+    use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
 
     #[test]
     fn roll_result_serializes_to_json() {
@@ -1197,5 +1288,21 @@ mod serde_tests {
         assert_eq!(json["dice"][0]["is_crit_failure"], false);
         assert_eq!(json["dice"][1]["dropped"], true);
         assert_eq!(json["dice"][1]["is_crit_failure"], true);
+    }
+
+    #[test]
+    fn rng_checkpoint_deserializes_for_restore() {
+        let mut rng = FastRng::with_seed(7);
+
+        let _before_checkpoint = rng.roll(10);
+        let checkpoint = rng.checkpoint();
+        let expected = rng.roll(10);
+
+        let json = serde_json::to_string(&checkpoint).unwrap();
+        let restored_checkpoint: RngCheckpoint = serde_json::from_str(&json).unwrap();
+
+        rng.restore(restored_checkpoint);
+
+        assert_eq!(rng.roll(10), expected);
     }
 }

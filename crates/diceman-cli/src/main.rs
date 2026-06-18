@@ -48,34 +48,36 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Roll { expression } => {
-            match diceman::roll(&expression) {
-                Ok(result) => {
-                    println!("{}", result.expression);
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
+        Commands::Roll { expression } => match diceman::roll(&expression) {
+            Ok(result) => {
+                println!("{}", result.expression);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        },
+        Commands::Sim {
+            expression,
+            n,
+            json,
+            cumulative,
+            lte,
+        } => match diceman::simulate(&expression, n) {
+            Ok(result) => {
+                if json {
+                    print_sim_json(&result);
+                } else if cumulative || lte {
+                    print_side_by_side(&expression, &result, lte);
+                } else {
+                    print_sim_histogram(&expression, &result);
                 }
             }
-        }
-        Commands::Sim { expression, n, json, cumulative, lte } => {
-            match diceman::simulate(&expression, n) {
-                Ok(result) => {
-                    if json {
-                        print_sim_json(&result);
-                    } else if cumulative || lte {
-                        print_side_by_side(&expression, &result, lte);
-                    } else {
-                        print_sim_histogram(&expression, &result);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
             }
-        }
+        },
         Commands::Notation => {
             print_notation_reference();
         }
@@ -117,7 +119,6 @@ fn print_sim_histogram(expression: &str, result: &diceman::SimResult) {
     println!("mean: {:.2}, std: {:.2}", result.mean, result.std_dev);
 }
 
-
 fn print_side_by_side(expression: &str, result: &diceman::SimResult, lte: bool) {
     let outcomes = result.sorted_outcomes();
     let max_count = outcomes.iter().map(|(_, c)| *c).max().unwrap_or(1);
@@ -137,7 +138,12 @@ fn print_side_by_side(expression: &str, result: &diceman::SimResult, lte: bool) 
     let right_header = format!("Cumulative ({} target)", direction);
     // Position right header so it aligns with the right bar area
     let header_pad = SIDE_BY_SIDE_TERM_WIDTH.saturating_sub(left_header.len() + right_header.len());
-    println!("{}{:>pad$}", left_header, right_header, pad = header_pad + right_header.len());
+    println!(
+        "{}{:>pad$}",
+        left_header,
+        right_header,
+        pad = header_pad + right_header.len()
+    );
     println!();
 
     for (value, count) in &outcomes {
@@ -145,7 +151,13 @@ fn print_side_by_side(expression: &str, result: &diceman::SimResult, lte: bool) 
         let dist_frac = *count as f64 / max_count as f64;
         let cum_pct_frac = cum_map.get(value).copied().unwrap_or(0.0);
 
-        let row = format_side_by_side_row(*value, dist_frac, dist_pct, cum_pct_frac, cum_pct_frac * 100.0);
+        let row = format_side_by_side_row(
+            *value,
+            dist_frac,
+            dist_pct,
+            cum_pct_frac,
+            cum_pct_frac * 100.0,
+        );
         println!("{}", row);
     }
 
@@ -176,7 +188,7 @@ fn braille_bar(fraction: f64, width: usize) -> String {
 
 /// Layout constants for side-by-side histogram (targeting 80-column terminal).
 /// Format: "{:>4}: [bar] {:5.1}% │ [bar] {:5.1}%"
-const SIDE_BY_SIDE_SEP: &str = " │ ";         // 3 chars (space, box-draw, space)
+const SIDE_BY_SIDE_SEP: &str = " │ "; // 3 chars (space, box-draw, space)
 const SIDE_BY_SIDE_TERM_WIDTH: usize = 80;
 
 /// Character width available for each bar in side-by-side mode.
@@ -186,11 +198,19 @@ const SIDE_BY_SIDE_BAR_LEFT: usize = 29;
 const SIDE_BY_SIDE_BAR_RIGHT: usize = 28;
 
 /// Formats one row of the side-by-side histogram.
-fn format_side_by_side_row(value: i64, dist_frac: f64, dist_pct: f64, cum_frac: f64, cum_pct: f64) -> String {
+fn format_side_by_side_row(
+    value: i64,
+    dist_frac: f64,
+    dist_pct: f64,
+    cum_frac: f64,
+    cum_pct: f64,
+) -> String {
     let dist_bar = braille_bar(dist_frac, SIDE_BY_SIDE_BAR_LEFT);
     let cum_bar = braille_bar(cum_frac, SIDE_BY_SIDE_BAR_RIGHT);
-    format!("{:>4}: {} {:5.1}%{}{} {:5.1}%",
-        value, dist_bar, dist_pct, SIDE_BY_SIDE_SEP, cum_bar, cum_pct)
+    format!(
+        "{:>4}: {} {:5.1}%{}{} {:5.1}%",
+        value, dist_bar, dist_pct, SIDE_BY_SIDE_SEP, cum_bar, cum_pct
+    )
 }
 
 #[cfg(test)]
@@ -201,8 +221,13 @@ mod tests {
     fn side_by_side_row_fits_80_columns() {
         let row = format_side_by_side_row(7, 1.0, 16.7, 0.583, 58.3);
         // Count display width (braille chars are 1-column wide)
-        assert_eq!(row.chars().count(), SIDE_BY_SIDE_TERM_WIDTH,
-            "row was {} chars: {}", row.chars().count(), row);
+        assert_eq!(
+            row.chars().count(),
+            SIDE_BY_SIDE_TERM_WIDTH,
+            "row was {} chars: {}",
+            row.chars().count(),
+            row
+        );
     }
 
     #[test]
@@ -214,8 +239,13 @@ mod tests {
             (12, 0.05, 2.8, 0.028, 2.8),
         ] {
             let row = format_side_by_side_row(val, df, dp, cf, cp);
-            assert_eq!(row.chars().count(), SIDE_BY_SIDE_TERM_WIDTH,
-                "val={}: row was {} chars", val, row.chars().count());
+            assert_eq!(
+                row.chars().count(),
+                SIDE_BY_SIDE_TERM_WIDTH,
+                "val={}: row was {} chars",
+                val,
+                row.chars().count()
+            );
         }
     }
 
