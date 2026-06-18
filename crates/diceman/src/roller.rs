@@ -42,6 +42,7 @@ impl Rng for FastRng {
 
 /// Result of a single die roll.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct DieResult {
     /// The final value of this die (after any modifications).
     pub value: i64,
@@ -57,6 +58,7 @@ pub struct DieResult {
 
 /// Result of evaluating a dice expression.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RollResult {
     /// The total value of the expression.
     pub total: i64,
@@ -1154,5 +1156,46 @@ mod tests {
         let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
         let result = evaluate_with_rng(&expr, &mut rng);
         assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::{DieResult, RollResult};
+
+    #[test]
+    fn roll_result_serializes_to_json() {
+        let result = RollResult {
+            total: 7,
+            dice: vec![
+                DieResult {
+                    value: 6,
+                    rolls: vec![6],
+                    dropped: false,
+                    is_crit_success: true,
+                    is_crit_failure: false,
+                },
+                DieResult {
+                    value: 1,
+                    rolls: vec![1],
+                    dropped: true,
+                    is_crit_success: false,
+                    is_crit_failure: true,
+                },
+            ],
+            expression: "2d6".to_string(),
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+
+        assert_eq!(json["total"], 7);
+        assert_eq!(json["expression"], "2d6");
+        assert_eq!(json["dice"][0]["value"], 6);
+        assert_eq!(json["dice"][0]["rolls"][0], 6);
+        assert_eq!(json["dice"][0]["dropped"], false);
+        assert_eq!(json["dice"][0]["is_crit_success"], true);
+        assert_eq!(json["dice"][0]["is_crit_failure"], false);
+        assert_eq!(json["dice"][1]["dropped"], true);
+        assert_eq!(json["dice"][1]["is_crit_failure"], true);
     }
 }
