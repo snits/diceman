@@ -48,6 +48,16 @@ diceman uses Roll20-compatible dice notation with some extensions.
 
 **Examples:** `2d6`, `1d20`, `4dF`, `d%`
 
+### Digit Dice
+
+| Notation | Description |
+|----------|-------------|
+| `Dnn` | Roll one dS per digit, read the dice as digits of one number |
+
+All digits must be the same and non-zero (`D66`, `D88`, `D444`).
+
+**Examples:** `D66` (roll 2d6, `3, 5` → `35`), `D666` (roll 3d6, `1, 4, 6` → `146`), `D88` (roll 2d8, `7, 8` → `78`)
+
 ### Arithmetic
 
 | Notation | Description |
