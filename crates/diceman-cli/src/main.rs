@@ -303,6 +303,15 @@ BASIC ROLLS
   d%        Percentile die (d100)
   dF        Fudge die (-1, 0, +1)
 
+DIGIT DICE
+  Dnn       Roll one dS per digit, read the dice as digits of one number
+            (digits must all match: D66, D88, D444)
+
+  Examples:
+  D66       Roll 2d6, read as a two-digit number (3, 5 -> 35)
+  D666      Roll 3d6, read as a three-digit number (1, 4, 6 -> 146)
+  D88       Roll 2d8 (7, 8 -> 78)
+
 ARITHMETIC
   + - * /   Basic operations (2d6 + 5, (1d6 + 2) * 3)
   (...)     Grouping
