@@ -1,7 +1,9 @@
 // ABOUTME: Formatting logic for dice roll results into human-readable strings.
 // ABOUTME: Converts roll data (dice values, modifiers, crits) into display expressions.
 
-use crate::ast::{Compare, Condition, Modifier, Roll, DieKind};
+use crate::ast::{
+    AnnotationRule, Compare, Condition, DieKind, RollModifier, RollPlan, ScoringMode,
+};
 use crate::roller::{DieResult, RollResult};
 use std::fmt;
 
@@ -11,31 +13,26 @@ impl fmt::Display for RollResult {
     }
 }
 
-/// Format a dice roll into a human-readable expression string.
+/// Format a dice roll plan into a human-readable expression string.
 ///
 /// Produces output like "4d6kh3[6, 5, 4, (1)] = 15" showing the notation,
 /// individual die values (with dropped/crit markers), and the total.
-pub(crate) fn format_roll(
-    roll: &Roll,
-    dice: &[DieResult],
-    total: i64,
-    success_condition: Option<&Condition>,
-) -> String {
-    let kind_str = match roll.kind {
+pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
+    let kind_str = match plan.pool.kind {
         DieKind::Number(n) => n.to_string(),
         DieKind::Percent => "%".to_string(),
         DieKind::Fudge => "F".to_string(),
     };
 
-    let modifiers_str: String = roll
+    let mut modifiers_str: String = plan
         .modifiers
         .iter()
         .map(|m| match m {
-            Modifier::KeepHighest(n) => format!("kh{}", n),
-            Modifier::KeepLowest(n) => format!("kl{}", n),
-            Modifier::DropHighest(n) => format!("dh{}", n),
-            Modifier::DropLowest(n) => format!("dl{}", n),
-            Modifier::Explode {
+            RollModifier::KeepHighest(n) => format!("kh{}", n),
+            RollModifier::KeepLowest(n) => format!("kl{}", n),
+            RollModifier::DropHighest(n) => format!("dh{}", n),
+            RollModifier::DropLowest(n) => format!("dl{}", n),
+            RollModifier::Explode {
                 compounding,
                 penetrating,
                 condition,
@@ -52,7 +49,7 @@ pub(crate) fn format_roll(
                 }
                 s
             }
-            Modifier::Reroll { once, condition } => {
+            RollModifier::Reroll { once, condition } => {
                 let mut s = "r".to_string();
                 if *once {
                     s.push('o');
@@ -62,28 +59,23 @@ pub(crate) fn format_roll(
                 }
                 s
             }
-            Modifier::CountSuccesses(c) => {
-                format!("{}{}", c.compare, c.value)
-            }
         })
         .collect();
 
+    // Success-counting scoring renders its condition after the modifiers.
+    let success_condition: Option<&Condition> = match &plan.scoring {
+        ScoringMode::CountSuccesses(cond) => {
+            modifiers_str.push_str(&format!("{}{}", cond.compare, cond.value));
+            Some(cond)
+        }
+        ScoringMode::Sum => None,
+    };
+
+    // Render crit markers: cs before cf, at most one of each.
     let crit_str = format!(
         "{}{}",
-        roll.crit_success.as_ref().map_or(String::new(), |c| {
-            if c.compare == Compare::Equal {
-                format!("cs{}", c.value)
-            } else {
-                format!("cs{}{}", c.compare, c.value)
-            }
-        }),
-        roll.crit_failure.as_ref().map_or(String::new(), |c| {
-            if c.compare == Compare::Equal {
-                format!("cf{}", c.value)
-            } else {
-                format!("cf{}{}", c.compare, c.value)
-            }
-        }),
+        crit_success_str(&plan.annotation_rules),
+        crit_failure_str(&plan.annotation_rules),
     );
 
     // Format dice, marking crits and successes
@@ -113,12 +105,43 @@ pub(crate) fn format_roll(
         let success_word = if total == 1 { "success" } else { "successes" };
         format!(
             "{}d{}{}{}[{}] = {} {}",
-            roll.count, kind_str, modifiers_str, crit_str, dice_str, total, success_word
+            plan.pool.count, kind_str, modifiers_str, crit_str, dice_str, total, success_word
         )
     } else {
         format!(
             "{}d{}{}{}[{}] = {}",
-            roll.count, kind_str, modifiers_str, crit_str, dice_str, total
+            plan.pool.count, kind_str, modifiers_str, crit_str, dice_str, total
         )
+    }
+}
+
+/// Render the first CriticalSuccess annotation rule as a `cs...` string, if any.
+fn crit_success_str(rules: &[AnnotationRule]) -> String {
+    rules
+        .iter()
+        .find_map(|r| match r {
+            AnnotationRule::CriticalSuccess(c) => Some(condition_marker_str("cs", c)),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Render the first CriticalFailure annotation rule as a `cf...` string, if any.
+fn crit_failure_str(rules: &[AnnotationRule]) -> String {
+    rules
+        .iter()
+        .find_map(|r| match r {
+            AnnotationRule::CriticalFailure(c) => Some(condition_marker_str("cf", c)),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Format a crit marker string, omitting the `=` for Equal comparisons.
+fn condition_marker_str(prefix: &str, c: &Condition) -> String {
+    if c.compare == Compare::Equal {
+        format!("{}{}", prefix, c.value)
+    } else {
+        format!("{}{}{}", prefix, c.compare, c.value)
     }
 }
