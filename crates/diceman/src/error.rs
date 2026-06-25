@@ -17,8 +17,8 @@ pub enum Error {
     #[error("Invalid dice count: {0}")]
     InvalidDiceCount(u32),
 
-    #[error("Invalid dice sides: {0}")]
-    InvalidDiceSides(u32),
+    #[error("Invalid die kind: {0}")]
+    InvalidDieKind(u32),
 
     #[error("Explode limit exceeded (max {0} explosions)")]
     ExplodeLimit(u32),
