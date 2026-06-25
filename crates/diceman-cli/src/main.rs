@@ -213,6 +213,83 @@ fn format_side_by_side_row(
     )
 }
 
+fn print_notation_reference() {
+    println!(
+        r#"DICE NOTATION REFERENCE
+
+BASIC ROLLS
+  NdS       Roll N dice with S sides (2d6, 1d20)
+  dS        Roll 1 die (d20 = 1d20)
+  d%        Percentile die (d100)
+  dF        Fudge die (-1, 0, +1)
+
+DIGIT DICE
+  Dnn       Roll one dS per digit, read the dice as digits of one number
+            (digits must all match: D66, D88, D444)
+
+  Examples:
+  D66       Roll 2d6, read as a two-digit number (3, 5 -> 35)
+  D666      Roll 3d6, read as a three-digit number (1, 4, 6 -> 146)
+  D88       Roll 2d8 (7, 8 -> 78)
+
+ARITHMETIC
+  + - * /   Basic operations (2d6 + 5, (1d6 + 2) * 3)
+  (...)     Grouping
+
+KEEP AND DROP
+  khN       Keep highest N dice (4d6kh3)
+  klN       Keep lowest N dice (2d20kl1 for disadvantage)
+  kN        Keep highest N (shorthand for khN)
+  dhN       Drop highest N dice
+  dlN       Drop lowest N dice (4d6dl1)
+
+EXPLODING DICE
+  !         Explode on max, new die per explosion (Roll20 style)
+  !!        Compounding explode, add to same die (Shadowrun style)
+  !p        Penetrating explode, -1 per explosion (HackMaster style)
+  !!p       Compounding penetrating
+
+  With conditions:
+  !>N       Explode on greater than N
+  !>=N      Explode on greater than or equal to N
+  !<N       Explode on less than N
+  !=N       Explode on equal to N
+
+  Examples:
+  1d6!      Standard exploding d6
+  1d6!!     Compounding (6+6+4 shows as [16])
+  1d6!p     Penetrating (6+5+3 shows as [6, 4, 2])
+  1d10!>=8  Explode on 8, 9, or 10
+
+REROLL
+  r         Reroll 1s until not 1
+  ro        Reroll once only
+  r<N       Reroll below N
+  r<=N      Reroll at or below N
+
+  Examples:
+  1d6r      Reroll 1s
+  2d6r<3    Reroll 1s and 2s
+  1d20ro    Reroll first 1 only
+
+SUCCESS COUNTING
+  >N        Count dice greater than N
+  >=N       Count dice greater than or equal to N
+  <N        Count dice less than N
+  <=N       Count dice less than or equal to N
+  =N        Count dice equal to N
+
+  Examples:
+  5d10>=8   World of Darkness (count 8, 9, 10)
+  6d6>4     Count 5s and 6s
+  8d6=6     Count only 6s
+
+MODIFIER ORDER
+  Modifiers apply: reroll -> explode -> keep/drop -> success count
+  Example: 4d6r!kh3 rerolls 1s, explodes 6s, then keeps highest 3"#
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,81 +368,4 @@ mod tests {
             assert_eq!(bar.chars().count(), 20, "failed at {}%", pct);
         }
     }
-}
-
-fn print_notation_reference() {
-    println!(
-        r#"DICE NOTATION REFERENCE
-
-BASIC ROLLS
-  NdS       Roll N dice with S sides (2d6, 1d20)
-  dS        Roll 1 die (d20 = 1d20)
-  d%        Percentile die (d100)
-  dF        Fudge die (-1, 0, +1)
-
-DIGIT DICE
-  Dnn       Roll one dS per digit, read the dice as digits of one number
-            (digits must all match: D66, D88, D444)
-
-  Examples:
-  D66       Roll 2d6, read as a two-digit number (3, 5 -> 35)
-  D666      Roll 3d6, read as a three-digit number (1, 4, 6 -> 146)
-  D88       Roll 2d8 (7, 8 -> 78)
-
-ARITHMETIC
-  + - * /   Basic operations (2d6 + 5, (1d6 + 2) * 3)
-  (...)     Grouping
-
-KEEP AND DROP
-  khN       Keep highest N dice (4d6kh3)
-  klN       Keep lowest N dice (2d20kl1 for disadvantage)
-  kN        Keep highest N (shorthand for khN)
-  dhN       Drop highest N dice
-  dlN       Drop lowest N dice (4d6dl1)
-
-EXPLODING DICE
-  !         Explode on max, new die per explosion (Roll20 style)
-  !!        Compounding explode, add to same die (Shadowrun style)
-  !p        Penetrating explode, -1 per explosion (HackMaster style)
-  !!p       Compounding penetrating
-
-  With conditions:
-  !>N       Explode on greater than N
-  !>=N      Explode on greater than or equal to N
-  !<N       Explode on less than N
-  !=N       Explode on equal to N
-
-  Examples:
-  1d6!      Standard exploding d6
-  1d6!!     Compounding (6+6+4 shows as [16])
-  1d6!p     Penetrating (6+5+3 shows as [6, 4, 2])
-  1d10!>=8  Explode on 8, 9, or 10
-
-REROLL
-  r         Reroll 1s until not 1
-  ro        Reroll once only
-  r<N       Reroll below N
-  r<=N      Reroll at or below N
-
-  Examples:
-  1d6r      Reroll 1s
-  2d6r<3    Reroll 1s and 2s
-  1d20ro    Reroll first 1 only
-
-SUCCESS COUNTING
-  >N        Count dice greater than N
-  >=N       Count dice greater than or equal to N
-  <N        Count dice less than N
-  <=N       Count dice less than or equal to N
-  =N        Count dice equal to N
-
-  Examples:
-  5d10>=8   World of Darkness (count 8, 9, 10)
-  6d6>4     Count 5s and 6s
-  8d6=6     Count only 6s
-
-MODIFIER ORDER
-  Modifiers apply: reroll -> explode -> keep/drop -> success count
-  Example: 4d6r!kh3 rerolls 1s, explodes 6s, then keeps highest 3"#
-    );
 }
