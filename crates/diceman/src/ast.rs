@@ -90,6 +90,33 @@ pub enum AnnotationRule {
     CriticalFailure(Condition),
 }
 
+/// The face value a die landed on.
+///
+/// Numeric dice produce `Numeric`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum DieFace {
+    /// A numeric face (e.g., a d6 showing 4).
+    Numeric(i64),
+}
+
+impl DieFace {
+    /// Return the numeric value of a `Numeric` face.
+    pub fn as_numeric(self) -> i64 {
+        match self {
+            DieFace::Numeric(n) => n,
+        }
+    }
+}
+
+impl fmt::Display for DieFace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DieFace::Numeric(n) => write!(f, "{n}"),
+        }
+    }
+}
+
 /// The type of dice to roll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DieKind {

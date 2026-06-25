@@ -2,8 +2,8 @@
 // ABOUTME: Evaluates parsed AST nodes to produce roll results.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DicePool, DieKind, Expr, Op, RollModifier, RollPlan,
-    ScoringMode,
+    AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op, RollModifier,
+    RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -76,10 +76,10 @@ impl Rng for FastRng {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct DieResult {
-    /// The final value of this die (after any modifications).
-    pub value: i64,
-    /// The original rolled values (before explosions).
-    pub rolls: Vec<i64>,
+    /// The final face of this die (after any modifications).
+    pub face: DieFace,
+    /// The history of faces this die landed on (initial roll, rerolls, explosions).
+    pub history: Vec<DieFace>,
     /// Whether this die was dropped/discarded.
     pub dropped: bool,
     /// Whether this die is marked as a critical success.
@@ -210,8 +210,8 @@ impl<R: Rng> Evaluator<'_, R> {
             .map(|_| {
                 let value = self.roll_die(&pool.kind);
                 DieResult {
-                    value,
-                    rolls: vec![value],
+                    face: DieFace::Numeric(value),
+                    history: vec![DieFace::Numeric(value)],
                     dropped: false,
                     is_crit_success: false,
                     is_crit_failure: false,
@@ -251,16 +251,24 @@ impl<R: Rng> Evaluator<'_, R> {
     /// Convert modified dice into a final numeric result per the scoring mode.
     fn score(dice: &[DieResult], scoring: &ScoringMode) -> i64 {
         match scoring {
-            ScoringMode::Sum => dice.iter().filter(|d| !d.dropped).map(|d| d.value).sum(),
+            ScoringMode::Sum => dice
+                .iter()
+                .filter(|d| !d.dropped)
+                .map(|d| d.face.as_numeric())
+                .sum(),
             ScoringMode::CountSuccesses(condition) => dice
                 .iter()
                 .filter(|d| !d.dropped)
-                .filter(|d| condition.compare.check(d.value, condition.value))
+                .filter(|d| {
+                    condition
+                        .compare
+                        .check(d.face.as_numeric(), condition.value)
+                })
                 .count() as i64,
             ScoringMode::DigitConcatenate => dice
                 .iter()
                 .filter(|d| !d.dropped)
-                .fold(0i64, |acc, d| acc * 10 + d.value),
+                .fold(0i64, |acc, d| acc * 10 + d.face.as_numeric()),
         }
     }
 
@@ -276,10 +284,10 @@ impl<R: Rng> Evaluator<'_, R> {
         });
         for die in dice.iter_mut().filter(|d| !d.dropped) {
             if let Some(c) = success_cond {
-                die.is_crit_success = c.compare.check(die.value, c.value);
+                die.is_crit_success = c.compare.check(die.face.as_numeric(), c.value);
             }
             if let Some(c) = failure_cond {
-                die.is_crit_failure = c.compare.check(die.value, c.value);
+                die.is_crit_failure = c.compare.check(die.face.as_numeric(), c.value);
             }
         }
     }
@@ -311,13 +319,16 @@ impl<R: Rng> Evaluator<'_, R> {
             }
 
             let mut reroll_count = 0;
-            while condition.compare.check(die.value, condition.value) {
+            while condition
+                .compare
+                .check(die.face.as_numeric(), condition.value)
+            {
                 if reroll_count >= MAX_REROLLS {
                     return Err(Error::RerollLimit(MAX_REROLLS));
                 }
                 let new_value = self.roll_die(kind);
-                die.rolls.push(new_value);
-                die.value = new_value;
+                die.history.push(DieFace::Numeric(new_value));
+                die.face = DieFace::Numeric(new_value);
                 reroll_count += 1;
 
                 if once {
@@ -351,7 +362,7 @@ impl<R: Rng> Evaluator<'_, R> {
                 continue;
             }
 
-            let mut current_value = dice[i].value;
+            let mut current_value = dice[i].face.as_numeric();
             let mut explode_count = 0;
 
             while condition.compare.check(current_value, condition.value) {
@@ -370,13 +381,13 @@ impl<R: Rng> Evaluator<'_, R> {
 
                 if compounding {
                     // Compounding: add to same die
-                    dice[i].value += added_value;
-                    dice[i].rolls.push(new_value);
+                    dice[i].face = DieFace::Numeric(dice[i].face.as_numeric() + added_value);
+                    dice[i].history.push(DieFace::Numeric(new_value));
                 } else {
                     // Standard: create new die
                     dice.push(DieResult {
-                        value: added_value,
-                        rolls: vec![new_value],
+                        face: DieFace::Numeric(added_value),
+                        history: vec![DieFace::Numeric(new_value)],
                         dropped: false,
                         is_crit_success: false,
                         is_crit_failure: false,
@@ -411,7 +422,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| dice[i].value);
+        indices.sort_by_key(|&i| dice[i].face.as_numeric());
 
         // Drop the lowest (active_count - n)
         let to_drop = active_count - n;
@@ -434,7 +445,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].value));
+        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].face.as_numeric()));
 
         // Drop the highest (active_count - n)
         let to_drop = active_count - n;
@@ -451,7 +462,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].value));
+        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].face.as_numeric()));
 
         for &i in indices.iter().take(n) {
             dice[i].dropped = true;
@@ -466,7 +477,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| dice[i].value);
+        indices.sort_by_key(|&i| dice[i].face.as_numeric());
 
         for &i in indices.iter().take(n) {
             dice[i].dropped = true;
@@ -903,8 +914,8 @@ mod tests {
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 9); // 6 + 3 (4-1)
         assert_eq!(result.dice.len(), 2); // Two separate dice
-        assert_eq!(result.dice[0].value, 6);
-        assert_eq!(result.dice[1].value, 3); // 4-1 penetrating
+        assert_eq!(result.dice[0].face.as_numeric(), 6);
+        assert_eq!(result.dice[1].face.as_numeric(), 3); // 4-1 penetrating
     }
 
     #[test]
@@ -1080,7 +1091,11 @@ mod tests {
         assert!(!dropped_die.is_crit_failure);
 
         // The kept die (value 6) SHOULD have is_crit_success set
-        let crit_die = result.dice.iter().find(|d| d.value == 6).unwrap();
+        let crit_die = result
+            .dice
+            .iter()
+            .find(|d| d.face.as_numeric() == 6)
+            .unwrap();
         assert!(crit_die.is_crit_success);
     }
 
@@ -1328,6 +1343,7 @@ mod tests {
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
+    use crate::ast::DieFace;
 
     #[test]
     fn roll_result_serializes_to_json() {
@@ -1335,15 +1351,15 @@ mod serde_tests {
             total: 7,
             dice: vec![
                 DieResult {
-                    value: 6,
-                    rolls: vec![6],
+                    face: DieFace::Numeric(6),
+                    history: vec![DieFace::Numeric(6)],
                     dropped: false,
                     is_crit_success: true,
                     is_crit_failure: false,
                 },
                 DieResult {
-                    value: 1,
-                    rolls: vec![1],
+                    face: DieFace::Numeric(1),
+                    history: vec![DieFace::Numeric(1)],
                     dropped: true,
                     is_crit_success: false,
                     is_crit_failure: true,
@@ -1356,8 +1372,8 @@ mod serde_tests {
 
         assert_eq!(json["total"], 7);
         assert_eq!(json["expression"], "2d6");
-        assert_eq!(json["dice"][0]["value"], 6);
-        assert_eq!(json["dice"][0]["rolls"][0], 6);
+        assert_eq!(json["dice"][0]["face"]["Numeric"], 6);
+        assert_eq!(json["dice"][0]["history"][0]["Numeric"], 6);
         assert_eq!(json["dice"][0]["dropped"], false);
         assert_eq!(json["dice"][0]["is_crit_success"], true);
         assert_eq!(json["dice"][0]["is_crit_failure"], false);
