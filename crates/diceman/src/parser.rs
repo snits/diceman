@@ -1,7 +1,10 @@
 // ABOUTME: Recursive descent parser for dice notation expressions.
 // ABOUTME: Converts token streams into an AST.
 
-use crate::ast::{Compare, Condition, Expr, Modifier, Op, Roll, DieKind};
+use crate::ast::{
+    AnnotationRule, Compare, Condition, DicePool, DieKind, Expr, Op, RollModifier, RollPlan,
+    ScoringMode,
+};
 use crate::error::{Error, Result};
 use crate::lexer::{Lexer, Token};
 
@@ -141,26 +144,22 @@ impl<'a> Parser<'a> {
         // Parse the die kind
         let kind = self.kind()?;
 
-        // Parse any modifiers
-        let modifiers = self.modifiers()?;
+        // Parse any modifiers (and success-counting scoring)
+        let (modifiers, scoring) = self.modifiers()?;
 
         // Parse critical markers (cs and cf can appear in any order)
-        let (crit_success, crit_failure) = self.crit_markers()?;
+        let annotation_rules = self.annotation_rules()?;
 
         // Validate: cs/cf cannot combine with success counting
-        let has_success_counting = modifiers
-            .iter()
-            .any(|m| matches!(m, Modifier::CountSuccesses(_)));
-        if has_success_counting && (crit_success.is_some() || crit_failure.is_some()) {
+        if matches!(scoring, ScoringMode::CountSuccesses(_)) && !annotation_rules.is_empty() {
             return Err(Error::CritWithSuccessCounting);
         }
 
-        Ok(Expr::Roll(Roll {
-            count,
-            kind,
+        Ok(Expr::Roll(RollPlan {
+            pool: DicePool { count, kind },
             modifiers,
-            crit_success,
-            crit_failure,
+            scoring,
+            annotation_rules,
         }))
     }
 
@@ -231,9 +230,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse modifiers (keep, drop, explode, reroll).
-    fn modifiers(&mut self) -> Result<Vec<Modifier>> {
+    /// Parse modifiers (keep, drop, explode, reroll) and success-counting scoring.
+    fn modifiers(&mut self) -> Result<(Vec<RollModifier>, ScoringMode)> {
         let mut modifiers = Vec::new();
+        let mut scoring = ScoringMode::Sum;
 
         loop {
             match self.current {
@@ -262,17 +262,17 @@ impl<'a> Parser<'a> {
                 // Comparison operators directly after dice = success counting
                 Token::Gt | Token::Lt | Token::Eq => {
                     let condition = self.required_condition()?;
-                    modifiers.push(Modifier::CountSuccesses(condition));
+                    scoring = ScoringMode::CountSuccesses(condition);
                 }
                 _ => break,
             }
         }
 
-        Ok(modifiers)
+        Ok((modifiers, scoring))
     }
 
     /// Parse a keep modifier (kh3, kl1, k3).
-    fn keep_modifier(&mut self) -> Result<Modifier> {
+    fn keep_modifier(&mut self) -> Result<RollModifier> {
         let high = match self.current {
             Token::H => {
                 self.advance()?;
@@ -288,14 +288,14 @@ impl<'a> Parser<'a> {
         let count = self.optional_number(1)?;
 
         if high {
-            Ok(Modifier::KeepHighest(count))
+            Ok(RollModifier::KeepHighest(count))
         } else {
-            Ok(Modifier::KeepLowest(count))
+            Ok(RollModifier::KeepLowest(count))
         }
     }
 
     /// Parse a drop modifier (dh3, dl1).
-    fn drop_modifier(&mut self) -> Result<Modifier> {
+    fn drop_modifier(&mut self) -> Result<RollModifier> {
         let high = match self.current {
             Token::H => {
                 self.advance()?;
@@ -316,14 +316,14 @@ impl<'a> Parser<'a> {
         let count = self.optional_number(1)?;
 
         if high {
-            Ok(Modifier::DropHighest(count))
+            Ok(RollModifier::DropHighest(count))
         } else {
-            Ok(Modifier::DropLowest(count))
+            Ok(RollModifier::DropLowest(count))
         }
     }
 
     /// Parse an explode modifier (!, !!, !p, !!p, !>5, !!p>5).
-    fn explode_modifier(&mut self) -> Result<Modifier> {
+    fn explode_modifier(&mut self) -> Result<RollModifier> {
         let compounding = if self.current == Token::Explode {
             self.advance()?;
             true
@@ -340,7 +340,7 @@ impl<'a> Parser<'a> {
 
         let condition = self.optional_condition()?;
 
-        Ok(Modifier::Explode {
+        Ok(RollModifier::Explode {
             compounding,
             penetrating,
             condition,
@@ -348,7 +348,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a reroll modifier (r, ro, r<3).
-    fn reroll_modifier(&mut self) -> Result<Modifier> {
+    fn reroll_modifier(&mut self) -> Result<RollModifier> {
         let once = if self.current == Token::O {
             self.advance()?;
             true
@@ -358,7 +358,7 @@ impl<'a> Parser<'a> {
 
         let condition = self.optional_condition()?;
 
-        Ok(Modifier::Reroll { once, condition })
+        Ok(RollModifier::Reroll { once, condition })
     }
 
     /// Parse an optional number, returning default if not present.
@@ -429,32 +429,37 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse critical success/failure markers (cs, cf).
-    fn crit_markers(&mut self) -> Result<(Option<Condition>, Option<Condition>)> {
-        let mut crit_success = None;
-        let mut crit_failure = None;
+    /// Parse critical success/failure markers (cs, cf) into annotation rules.
+    fn annotation_rules(&mut self) -> Result<Vec<AnnotationRule>> {
+        let mut rules = Vec::new();
+        let mut seen_success = false;
+        let mut seen_failure = false;
 
         loop {
             match self.current {
                 Token::CritSuccess => {
-                    if crit_success.is_some() {
+                    if seen_success {
                         return Err(Error::DuplicateCritMarker("cs".to_string()));
                     }
                     self.advance()?;
-                    crit_success = Some(self.crit_condition()?);
+                    let cond = self.crit_condition()?;
+                    rules.push(AnnotationRule::CriticalSuccess(cond));
+                    seen_success = true;
                 }
                 Token::CritFail => {
-                    if crit_failure.is_some() {
+                    if seen_failure {
                         return Err(Error::DuplicateCritMarker("cf".to_string()));
                     }
                     self.advance()?;
-                    crit_failure = Some(self.crit_condition()?);
+                    let cond = self.crit_condition()?;
+                    rules.push(AnnotationRule::CriticalFailure(cond));
+                    seen_failure = true;
                 }
                 _ => break,
             }
         }
 
-        Ok((crit_success, crit_failure))
+        Ok(rules)
     }
 
     /// Parse a condition for crit markers. Defaults to Equal if just a number.
@@ -501,12 +506,14 @@ mod tests {
         let expr = parse("2d6").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 2,
-                kind: DieKind::Number(6),
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 2,
+                    kind: DieKind::Number(6),
+                },
                 modifiers: vec![],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -516,12 +523,14 @@ mod tests {
         let expr = parse("4d6kh3").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 4,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::KeepHighest(3)],
-                crit_success: None,
-                crit_failure: None,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 4,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::KeepHighest(3)],
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -544,16 +553,18 @@ mod tests {
         let expr = parse("1d6!").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
                     condition: None,
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -563,10 +574,12 @@ mod tests {
         let expr = parse("1d6!>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
                     condition: Some(Condition {
@@ -574,8 +587,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -585,16 +598,18 @@ mod tests {
         let expr = parse("1d6!p").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
                     condition: None,
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -604,10 +619,12 @@ mod tests {
         let expr = parse("1d6!p>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
                     condition: Some(Condition {
@@ -615,8 +632,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -626,16 +643,18 @@ mod tests {
         let expr = parse("1d6!!").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
                     condition: None,
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -645,16 +664,18 @@ mod tests {
         let expr = parse("1d6!!p").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
                     condition: None,
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -664,10 +685,12 @@ mod tests {
         let expr = parse("1d6!!>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
                     condition: Some(Condition {
@@ -675,8 +698,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -686,10 +709,12 @@ mod tests {
         let expr = parse("1d6!!p>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::Explode {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
                     condition: Some(Condition {
@@ -697,8 +722,8 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -708,12 +733,14 @@ mod tests {
         let expr = parse("d%").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Percent,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Percent,
+                },
                 modifiers: vec![],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -723,12 +750,14 @@ mod tests {
         let expr = parse("4dF").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 4,
-                kind: DieKind::Fudge,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 4,
+                    kind: DieKind::Fudge,
+                },
                 modifiers: vec![],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -750,12 +779,14 @@ mod tests {
         let expr = parse("4d6dl1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 4,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::DropLowest(1)],
-                crit_success: None,
-                crit_failure: None,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 4,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::DropLowest(1)],
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -765,12 +796,14 @@ mod tests {
         let expr = parse("2d20dh1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 2,
-                kind: DieKind::Number(20),
-                modifiers: vec![Modifier::DropHighest(1)],
-                crit_success: None,
-                crit_failure: None,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 2,
+                    kind: DieKind::Number(20),
+                },
+                modifiers: vec![RollModifier::DropHighest(1)],
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })
         );
     }
@@ -780,15 +813,17 @@ mod tests {
         let expr = parse("5d10>=8").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 5,
-                kind: DieKind::Number(10),
-                modifiers: vec![Modifier::CountSuccesses(Condition {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 5,
+                    kind: DieKind::Number(10),
+                },
+                modifiers: vec![],
+                scoring: ScoringMode::CountSuccesses(Condition {
                     compare: Compare::GreaterOrEqual,
                     value: 8,
-                })],
-                crit_success: None,
-                crit_failure: None,
+                }),
+                annotation_rules: vec![],
             })
         );
     }
@@ -798,15 +833,17 @@ mod tests {
         let expr = parse("6d6>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 6,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::CountSuccesses(Condition {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 6,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![],
+                scoring: ScoringMode::CountSuccesses(Condition {
                     compare: Compare::GreaterThan,
                     value: 4,
-                })],
-                crit_success: None,
-                crit_failure: None,
+                }),
+                annotation_rules: vec![],
             })
         );
     }
@@ -816,15 +853,17 @@ mod tests {
         let expr = parse("8d6=6").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 8,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::CountSuccesses(Condition {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 8,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![],
+                scoring: ScoringMode::CountSuccesses(Condition {
                     compare: Compare::Equal,
                     value: 6,
-                })],
-                crit_success: None,
-                crit_failure: None,
+                }),
+                annotation_rules: vec![],
             })
         );
     }
@@ -834,15 +873,17 @@ mod tests {
         let expr = parse("1d20cs20").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(20),
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(20),
+                },
                 modifiers: vec![],
-                crit_success: Some(Condition {
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![AnnotationRule::CriticalSuccess(Condition {
                     compare: Compare::Equal,
                     value: 20,
-                }),
-                crit_failure: None,
+                })],
             })
         );
     }
@@ -852,15 +893,17 @@ mod tests {
         let expr = parse("1d20cf1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(20),
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(20),
+                },
                 modifiers: vec![],
-                crit_success: None,
-                crit_failure: Some(Condition {
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![AnnotationRule::CriticalFailure(Condition {
                     compare: Compare::Equal,
                     value: 1,
-                }),
+                })],
             })
         );
     }
@@ -870,18 +913,23 @@ mod tests {
         let expr = parse("1d20cs20cf1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(20),
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(20),
+                },
                 modifiers: vec![],
-                crit_success: Some(Condition {
-                    compare: Compare::Equal,
-                    value: 20,
-                }),
-                crit_failure: Some(Condition {
-                    compare: Compare::Equal,
-                    value: 1,
-                }),
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![
+                    AnnotationRule::CriticalSuccess(Condition {
+                        compare: Compare::Equal,
+                        value: 20,
+                    }),
+                    AnnotationRule::CriticalFailure(Condition {
+                        compare: Compare::Equal,
+                        value: 1,
+                    }),
+                ],
             })
         );
     }
@@ -891,18 +939,23 @@ mod tests {
         let expr = parse("1d20cs>=19cf1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(20),
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(20),
+                },
                 modifiers: vec![],
-                crit_success: Some(Condition {
-                    compare: Compare::GreaterOrEqual,
-                    value: 19,
-                }),
-                crit_failure: Some(Condition {
-                    compare: Compare::Equal,
-                    value: 1,
-                }),
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![
+                    AnnotationRule::CriticalSuccess(Condition {
+                        compare: Compare::GreaterOrEqual,
+                        value: 19,
+                    }),
+                    AnnotationRule::CriticalFailure(Condition {
+                        compare: Compare::Equal,
+                        value: 1,
+                    }),
+                ],
             })
         );
     }
@@ -936,15 +989,17 @@ mod tests {
         let expr = parse("4d6kh3cs6").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 4,
-                kind: DieKind::Number(6),
-                modifiers: vec![Modifier::KeepHighest(3)],
-                crit_success: Some(Condition {
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 4,
+                    kind: DieKind::Number(6),
+                },
+                modifiers: vec![RollModifier::KeepHighest(3)],
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![AnnotationRule::CriticalSuccess(Condition {
                     compare: Compare::Equal,
                     value: 6,
-                }),
-                crit_failure: None,
+                })],
             })
         );
     }
@@ -954,18 +1009,23 @@ mod tests {
         let expr = parse("1d20cf1cs20").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(Roll {
-                count: 1,
-                kind: DieKind::Number(20),
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 1,
+                    kind: DieKind::Number(20),
+                },
                 modifiers: vec![],
-                crit_success: Some(Condition {
-                    compare: Compare::Equal,
-                    value: 20,
-                }),
-                crit_failure: Some(Condition {
-                    compare: Compare::Equal,
-                    value: 1,
-                }),
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![
+                    AnnotationRule::CriticalFailure(Condition {
+                        compare: Compare::Equal,
+                        value: 1,
+                    }),
+                    AnnotationRule::CriticalSuccess(Condition {
+                        compare: Compare::Equal,
+                        value: 20,
+                    }),
+                ],
             })
         );
     }
