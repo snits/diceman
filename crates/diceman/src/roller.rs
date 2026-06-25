@@ -1,7 +1,9 @@
 // ABOUTME: Dice rolling and expression evaluation logic.
 // ABOUTME: Evaluates parsed AST nodes to produce roll results.
 
-use crate::ast::{Compare, Condition, Expr, Modifier, Op, Roll, DieKind};
+use crate::ast::{
+    AnnotationRule, Compare, Condition, DieKind, Expr, Op, RollModifier, RollPlan, ScoringMode,
+};
 use crate::error::{Error, Result};
 use crate::format;
 
@@ -137,7 +139,7 @@ impl<R: Rng> Evaluator<'_, R> {
                     n.to_string()
                 },
             }),
-            Expr::Roll(roll) => self.evaluate_roll(roll),
+            Expr::Roll(plan) => self.evaluate_roll(plan),
             Expr::BinOp { op, left, right } => {
                 let left_result = self.evaluate(left)?;
                 let right_result = self.evaluate(right)?;
@@ -219,11 +221,11 @@ impl<R: Rng> Evaluator<'_, R> {
         })
     }
 
-    fn evaluate_roll(&mut self, roll: &Roll) -> Result<RollResult> {
+    fn evaluate_roll(&mut self, plan: &RollPlan) -> Result<RollResult> {
         // Roll the dice
-        let mut dice: Vec<DieResult> = (0..roll.count)
+        let mut dice: Vec<DieResult> = (0..plan.pool.count)
             .map(|_| {
-                let value = self.roll_die(&roll.kind);
+                let value = self.roll_die(&plan.pool.kind);
                 DieResult {
                     value,
                     rolls: vec![value],
@@ -234,37 +236,37 @@ impl<R: Rng> Evaluator<'_, R> {
             })
             .collect();
 
-        // Apply modifiers in order: reroll -> explode -> keep/drop -> count
-        let mut success_condition: Option<&Condition> = None;
-        for modifier in &roll.modifiers {
+        // Apply modifiers in order: reroll -> explode -> keep/drop
+        for modifier in &plan.modifiers {
             match modifier {
-                Modifier::Reroll { once, condition } => {
-                    self.apply_reroll(&mut dice, &roll.kind, *once, condition.as_ref())?;
+                RollModifier::Reroll { once, condition } => {
+                    self.apply_reroll(&mut dice, &plan.pool.kind, *once, condition.as_ref())?;
                 }
-                Modifier::Explode {
+                RollModifier::Explode {
                     compounding,
                     penetrating,
                     condition,
                 } => {
                     self.apply_explode(
                         &mut dice,
-                        &roll.kind,
+                        &plan.pool.kind,
                         *compounding,
                         *penetrating,
                         condition.as_ref(),
                     )?;
                 }
-                Modifier::KeepHighest(n) => self.apply_keep_highest(&mut dice, *n),
-                Modifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
-                Modifier::DropHighest(n) => self.apply_drop_highest(&mut dice, *n),
-                Modifier::DropLowest(n) => self.apply_drop_lowest(&mut dice, *n),
-                Modifier::CountSuccesses(condition) => {
-                    success_condition = Some(condition);
-                }
+                RollModifier::KeepHighest(n) => self.apply_keep_highest(&mut dice, *n),
+                RollModifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
+                RollModifier::DropHighest(n) => self.apply_drop_highest(&mut dice, *n),
+                RollModifier::DropLowest(n) => self.apply_drop_lowest(&mut dice, *n),
             }
         }
 
-        // Calculate total: count successes or sum values
+        // Calculate total from the scoring mode
+        let success_condition: Option<&Condition> = match &plan.scoring {
+            ScoringMode::CountSuccesses(cond) => Some(cond),
+            ScoringMode::Sum => None,
+        };
         let total: i64 = if let Some(condition) = success_condition {
             dice.iter()
                 .filter(|d| !d.dropped)
@@ -278,8 +280,8 @@ impl<R: Rng> Evaluator<'_, R> {
             String::new()
         } else {
             // Mark critical successes/failures (display-only)
-            self.mark_crits(&mut dice, &roll.crit_success, &roll.crit_failure);
-            format::format_roll(roll, &dice, total, success_condition)
+            self.mark_crits(&mut dice, &plan.annotation_rules);
+            format::format_roll(plan, &dice, total)
         };
 
         Ok(RollResult {
@@ -478,18 +480,21 @@ impl<R: Rng> Evaluator<'_, R> {
         }
     }
 
-    fn mark_crits(
-        &self,
-        dice: &mut [DieResult],
-        crit_success: &Option<Condition>,
-        crit_failure: &Option<Condition>,
-    ) {
+    fn mark_crits(&self, dice: &mut [DieResult], rules: &[AnnotationRule]) {
+        let success_cond = rules.iter().find_map(|r| match r {
+            AnnotationRule::CriticalSuccess(c) => Some(c),
+            _ => None,
+        });
+        let failure_cond = rules.iter().find_map(|r| match r {
+            AnnotationRule::CriticalFailure(c) => Some(c),
+            _ => None,
+        });
         for die in dice.iter_mut().filter(|d| !d.dropped) {
-            if let Some(ref cond) = crit_success {
-                die.is_crit_success = cond.compare.check(die.value, cond.value);
+            if let Some(c) = success_cond {
+                die.is_crit_success = c.compare.check(die.value, c.value);
             }
-            if let Some(ref cond) = crit_failure {
-                die.is_crit_failure = cond.compare.check(die.value, cond.value);
+            if let Some(c) = failure_cond {
+                die.is_crit_failure = c.compare.check(die.value, c.value);
             }
         }
     }
@@ -498,6 +503,7 @@ impl<R: Rng> Evaluator<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::DicePool;
 
     /// A deterministic RNG for testing.
     struct TestRng {
@@ -559,14 +565,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_basic_roll() {
-        let roll = Roll {
-            count: 2,
-            kind: DieKind::Number(6),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
             modifiers: vec![],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 7);
@@ -574,14 +582,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_keep_highest() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::KeepHighest(3)],
-            crit_success: None,
-            crit_failure: None,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::KeepHighest(3)],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Should keep 5, 3, 6 = 14
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 14);
@@ -591,12 +601,14 @@ mod tests {
     fn test_evaluate_expression() {
         let expr = Expr::BinOp {
             op: Op::Add,
-            left: Box::new(Expr::Roll(Roll {
-                count: 2,
-                kind: DieKind::Number(6),
+            left: Box::new(Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 2,
+                    kind: DieKind::Number(6),
+                },
                 modifiers: vec![],
-                crit_success: None,
-                crit_failure: None,
+                scoring: ScoringMode::Sum,
+                annotation_rules: vec![],
             })),
             right: Box::new(Expr::Number(5)),
         };
@@ -607,14 +619,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_fudge() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Fudge,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Fudge,
+            },
             modifiers: vec![],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 2, 3, 2]); // -1, 0, 1, 0 = 0
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 0);
@@ -622,14 +636,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_drop_lowest() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::DropLowest(1)],
-            crit_success: None,
-            crit_failure: None,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::DropLowest(1)],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 1, keep 5+3+6 = 14
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 14);
@@ -637,14 +653,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_drop_highest() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::DropHighest(1)],
-            crit_success: None,
-            crit_failure: None,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::DropHighest(1)],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 6, keep 1+5+3 = 9
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 9);
@@ -652,17 +670,19 @@ mod tests {
 
     #[test]
     fn test_evaluate_count_successes() {
-        let roll = Roll {
-            count: 5,
-            kind: DieKind::Number(10),
-            modifiers: vec![Modifier::CountSuccesses(Condition {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 5,
+                kind: DieKind::Number(10),
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::CountSuccesses(Condition {
                 compare: Compare::GreaterOrEqual,
                 value: 8,
-            })],
-            crit_success: None,
-            crit_failure: None,
+            }),
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]); // 10, 8, 9 >= 8 = 3 successes
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 3);
@@ -670,17 +690,19 @@ mod tests {
 
     #[test]
     fn test_evaluate_count_successes_zero() {
-        let roll = Roll {
-            count: 3,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::CountSuccesses(Condition {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 3,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::CountSuccesses(Condition {
                 compare: Compare::Equal,
                 value: 6,
-            })],
-            crit_success: None,
-            crit_failure: None,
+            }),
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 2, 3]); // No 6s = 0 successes
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 0);
@@ -688,17 +710,19 @@ mod tests {
 
     #[test]
     fn test_evaluate_count_successes_output_format() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Number(10),
-            modifiers: vec![Modifier::CountSuccesses(Condition {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Number(10),
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::CountSuccesses(Condition {
                 compare: Compare::GreaterOrEqual,
                 value: 8,
-            })],
-            crit_success: None,
-            crit_failure: None,
+            }),
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![10, 5, 8, 3]); // 10*, 5, 8*, 3 = 2 successes
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert!(result.expression.contains("successes"));
@@ -707,19 +731,38 @@ mod tests {
     }
 
     #[test]
+    fn test_success_counting_renders_condition_after_modifiers() {
+        // Input "5d10>=8kh3" writes the success condition before the keep
+        // modifier. The rendered expression normalizes to the canonical form
+        // with the condition rendered after the modifiers.
+        let expr = crate::parse("5d10>=8kh3").unwrap();
+        let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        // 5d10 -> [10, 7, 8, 3, 9]; keep highest 3 keeps 10, 8, 9 and drops
+        // 7, 3; successes >= 8 among kept = 10, 8, 9 = 3.
+        assert_eq!(result.total, 3);
+        assert_eq!(
+            result.expression,
+            "5d10kh3>=8[10*, (7), 8*, (3), 9*] = 3 successes"
+        );
+    }
+
+    #[test]
     fn test_evaluate_penetrating_explode() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: true,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Rolls: 6 (explode), 6 (explode), 4 (stop)
         // Added: 6 + (6-1) + (4-1) = 6 + 5 + 3 = 14
         let mut rng = TestRng::new(vec![6, 6, 4]);
@@ -729,18 +772,20 @@ mod tests {
 
     #[test]
     fn test_evaluate_penetrating_explode_no_explosion() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: true,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Roll: 4 (no explosion)
         // Total: 4 (no -1 because no explosion occurred)
         let mut rng = TestRng::new(vec![4]);
@@ -750,18 +795,20 @@ mod tests {
 
     #[test]
     fn test_evaluate_standard_explode_creates_new_dice() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: false,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Rolls: 6 (explode, create new die), 4 (stop)
         // Result: 2 dice with values 6 and 4
         let mut rng = TestRng::new(vec![6, 4]);
@@ -772,18 +819,20 @@ mod tests {
 
     #[test]
     fn test_evaluate_standard_explode_chain() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: false,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Rolls: 6 (explode), 6 (explode), 6 (explode), 4 (stop)
         // Result: 4 dice with values 6, 6, 6, 4
         let mut rng = TestRng::new(vec![6, 6, 6, 4]);
@@ -794,18 +843,20 @@ mod tests {
 
     #[test]
     fn test_evaluate_compounding_explode() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: false,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Rolls: 6 (explode), 6 (explode), 4 (stop)
         // Result: 1 die with value 6 + 6 + 4 = 16
         let mut rng = TestRng::new(vec![6, 6, 4]);
@@ -816,21 +867,23 @@ mod tests {
 
     #[test]
     fn test_evaluate_explode_with_keep() {
-        let roll = Roll {
-            count: 2,
-            kind: DieKind::Number(6),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
             modifiers: vec![
-                Modifier::Explode {
+                RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
                     condition: None,
                 },
-                Modifier::KeepHighest(2),
+                RollModifier::KeepHighest(2),
             ],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Initial rolls: 6 (explode), 3
         // Explosion: 5 (stop)
         // Result: 3 dice (6, 5, 3), keep highest 2 (6, 5)
@@ -843,18 +896,20 @@ mod tests {
 
     #[test]
     fn test_evaluate_standard_penetrating_explode() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: true,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         // Rolls: 6 (explode, create new die with -1), 4 (stop)
         // Result: 2 dice with values 6 and 3 (4-1 penetrating)
         let mut rng = TestRng::new(vec![6, 4]);
@@ -867,58 +922,67 @@ mod tests {
 
     #[test]
     fn test_crit_success_marker_output() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(20),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(20),
+            },
             modifiers: vec![],
-            crit_success: Some(Condition {
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![AnnotationRule::CriticalSuccess(Condition {
                 compare: Compare::Equal,
                 value: 20,
-            }),
-            crit_failure: None,
+            })],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![20]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert!(result.expression.contains("20**"));
-        assert_eq!(result.dice[0].is_crit_success, true);
+        assert!(result.dice[0].is_crit_success);
     }
 
     #[test]
     fn test_crit_failure_marker_output() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(20),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(20),
+            },
             modifiers: vec![],
-            crit_success: None,
-            crit_failure: Some(Condition {
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![AnnotationRule::CriticalFailure(Condition {
                 compare: Compare::Equal,
                 value: 1,
-            }),
+            })],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert!(result.expression.contains("1*"));
-        assert_eq!(result.dice[0].is_crit_failure, true);
+        assert!(result.dice[0].is_crit_failure);
     }
 
     #[test]
     fn test_crit_both_markers_output() {
-        let roll = Roll {
-            count: 3,
-            kind: DieKind::Number(20),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 3,
+                kind: DieKind::Number(20),
+            },
             modifiers: vec![],
-            crit_success: Some(Condition {
-                compare: Compare::Equal,
-                value: 20,
-            }),
-            crit_failure: Some(Condition {
-                compare: Compare::Equal,
-                value: 1,
-            }),
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![
+                AnnotationRule::CriticalSuccess(Condition {
+                    compare: Compare::Equal,
+                    value: 20,
+                }),
+                AnnotationRule::CriticalFailure(Condition {
+                    compare: Compare::Equal,
+                    value: 1,
+                }),
+            ],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![20, 10, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert!(result.expression.contains("20**"));
@@ -928,20 +992,25 @@ mod tests {
 
     #[test]
     fn test_crit_no_effect_on_total() {
-        let roll = Roll {
-            count: 2,
-            kind: DieKind::Number(20),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 2,
+                kind: DieKind::Number(20),
+            },
             modifiers: vec![],
-            crit_success: Some(Condition {
-                compare: Compare::Equal,
-                value: 20,
-            }),
-            crit_failure: Some(Condition {
-                compare: Compare::Equal,
-                value: 1,
-            }),
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![
+                AnnotationRule::CriticalSuccess(Condition {
+                    compare: Compare::Equal,
+                    value: 20,
+                }),
+                AnnotationRule::CriticalFailure(Condition {
+                    compare: Compare::Equal,
+                    value: 1,
+                }),
+            ],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![20, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 21); // 20 + 1, crits don't change value
@@ -1003,20 +1072,25 @@ mod tests {
 
     #[test]
     fn test_dropped_dice_no_crit_marker() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::KeepHighest(3)],
-            crit_success: Some(Condition {
-                compare: Compare::Equal,
-                value: 6,
-            }),
-            crit_failure: Some(Condition {
-                compare: Compare::Equal,
-                value: 1,
-            }),
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::KeepHighest(3)],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![
+                AnnotationRule::CriticalSuccess(Condition {
+                    compare: Compare::Equal,
+                    value: 6,
+                }),
+                AnnotationRule::CriticalFailure(Condition {
+                    compare: Compare::Equal,
+                    value: 1,
+                }),
+            ],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![6, 4, 3, 1]); // 1 will be dropped
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
 
@@ -1035,17 +1109,19 @@ mod tests {
     fn test_reroll_basic() {
         // 2d6r: default reroll condition is =1
         // Rolls: 1 (rerolled), 4 (replacement), 5 (second die, no reroll)
-        let roll = Roll {
-            count: 2,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Reroll {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Reroll {
                 once: false,
                 condition: None, // defaults to =1
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 9); // 4 (rerolled from 1) + 5
@@ -1055,17 +1131,19 @@ mod tests {
     fn test_reroll_once() {
         // 1d6ro: reroll once, even if replacement still matches
         // Rolls: 1 (matches =1, reroll), 1 (still matches but once=true, stop)
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Reroll {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Reroll {
                 once: true,
                 condition: None, // defaults to =1
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 1); // Rerolled once to 1, kept because once=true
@@ -1075,20 +1153,22 @@ mod tests {
     fn test_reroll_with_condition() {
         // 1d6r<3: reroll if value < 3
         // Rolls: 2 (matches <3, reroll), 4 (does not match, stop)
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Reroll {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Reroll {
                 once: false,
                 condition: Some(Condition {
                     compare: Compare::LessThan,
                     value: 3,
                 }),
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![2, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 4);
@@ -1098,17 +1178,19 @@ mod tests {
     fn test_reroll_no_match() {
         // 2d6r: default condition =1, but no dice roll 1
         // Rolls: 5, 3 — neither matches =1, no reroll
-        let roll = Roll {
-            count: 2,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Reroll {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Reroll {
                 once: false,
                 condition: None,
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![5, 3]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 8);
@@ -1130,20 +1212,22 @@ mod tests {
     #[test]
     fn test_reroll_limit() {
         // 1d6r=1 with TestRng always returning 1 — should hit reroll limit
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Reroll {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Reroll {
                 once: false,
                 condition: Some(Condition {
                     compare: Compare::Equal,
                     value: 1,
                 }),
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1]); // Wraps around, always returns 1
         let result = evaluate_with_rng(&expr, &mut rng);
         assert!(matches!(result, Err(Error::RerollLimit(_))));
@@ -1151,14 +1235,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_keep_lowest() {
-        let roll = Roll {
-            count: 4,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::KeepLowest(1)],
-            crit_success: None,
-            crit_failure: None,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::KeepLowest(1)],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![2, 5, 3, 6]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 2); // Keep lowest: 2
@@ -1167,14 +1253,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_keep_lowest_all() {
-        let roll = Roll {
-            count: 2,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::KeepLowest(5)], // Keep more than rolled
-            crit_success: None,
-            crit_failure: None,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::KeepLowest(5)], // Keep more than rolled
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 7); // All kept
@@ -1182,14 +1270,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_percent_dice() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Percent,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Percent,
+            },
             modifiers: vec![],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![42]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 42);
@@ -1197,14 +1287,16 @@ mod tests {
 
     #[test]
     fn test_evaluate_percent_dice_max() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Percent,
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Percent,
+            },
             modifiers: vec![],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![100]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.total, 100);
@@ -1232,18 +1324,20 @@ mod tests {
     #[test]
     fn test_explode_limit() {
         // 1d6!! (compounding) with TestRng always returning 6 — should hit explode limit
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(6),
-            modifiers: vec![Modifier::Explode {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: false,
                 condition: None, // defaults to =max (6)
             }],
-            crit_success: None,
-            crit_failure: None,
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
         };
-        let expr = Expr::Roll(roll);
+        let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
         let result = evaluate_with_rng(&expr, &mut rng);
         assert!(matches!(result, Err(Error::ExplodeLimit(_))));

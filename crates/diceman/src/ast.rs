@@ -8,8 +8,8 @@ use std::fmt;
 pub enum Expr {
     /// A literal number.
     Number(i64),
-    /// A dice roll with optional modifiers.
-    Roll(Roll),
+    /// A dice roll plan with optional modifiers.
+    Roll(RollPlan),
     /// A binary operation (e.g., addition, subtraction).
     BinOp {
         op: Op,
@@ -27,19 +27,72 @@ pub enum Expr {
     Group(Box<Expr>),
 }
 
-/// A dice roll expression (e.g., "4d6kh3").
+/// A dice pool: what to roll.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Roll {
+pub struct DicePool {
     /// Number of dice to roll.
     pub count: u32,
     /// Kind of die (numeric N-sided, percentile, or fudge).
     pub kind: DieKind,
-    /// Modifiers applied to the roll.
-    pub modifiers: Vec<Modifier>,
-    /// Critical success marker condition.
-    pub crit_success: Option<Condition>,
-    /// Critical failure marker condition.
-    pub crit_failure: Option<Condition>,
+}
+
+/// A dice roll plan: the normalized execution model produced by the parser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RollPlan {
+    /// The dice pool to roll.
+    pub pool: DicePool,
+    /// Modifiers applied to the pool before scoring.
+    pub modifiers: Vec<RollModifier>,
+    /// How modified dice are converted to a final numeric result.
+    pub scoring: ScoringMode,
+    /// Annotations detecting interesting outcomes (descriptive only).
+    pub annotation_rules: Vec<AnnotationRule>,
+}
+
+/// A modifier that transforms the dice pool before scoring.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RollModifier {
+    /// Keep the highest N dice.
+    KeepHighest(u32),
+    /// Keep the lowest N dice.
+    KeepLowest(u32),
+    /// Drop the highest N dice.
+    DropHighest(u32),
+    /// Drop the lowest N dice.
+    DropLowest(u32),
+    /// Reroll dice matching the condition.
+    Reroll {
+        /// If true, only reroll once per die.
+        once: bool,
+        /// The condition for reroll (defaults to 1).
+        condition: Option<Condition>,
+    },
+    /// Explode dice matching the condition.
+    Explode {
+        /// If true, add explosions to same die (compounding/Shadowrun).
+        /// If false, create new dice for each explosion (standard/Roll20).
+        compounding: bool,
+        /// If true, subtract 1 from each explosion roll's added value.
+        penetrating: bool,
+        /// The condition for explosion (defaults to max value).
+        condition: Option<Condition>,
+    },
+}
+
+/// How modified dice become a final numeric outcome.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScoringMode {
+    /// Sum the values of non-dropped dice.
+    Sum,
+    /// Count dice matching the condition instead of summing.
+    CountSuccesses(Condition),
+}
+
+/// A rule that detects an interesting outcome (descriptive only; no gameplay effect).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnnotationRule {
+    CriticalSuccess(Condition),
+    CriticalFailure(Condition),
 }
 
 /// The type of dice to roll.
@@ -82,38 +135,6 @@ impl fmt::Display for Op {
             Op::Div => write!(f, "/"),
         }
     }
-}
-
-/// A modifier applied to a dice roll.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Modifier {
-    /// Keep the highest N dice.
-    KeepHighest(u32),
-    /// Keep the lowest N dice.
-    KeepLowest(u32),
-    /// Drop the highest N dice.
-    DropHighest(u32),
-    /// Drop the lowest N dice.
-    DropLowest(u32),
-    /// Explode dice matching the condition.
-    Explode {
-        /// If true, add explosions to same die (compounding/Shadowrun).
-        /// If false, create new dice for each explosion (standard/Roll20).
-        compounding: bool,
-        /// If true, subtract 1 from each explosion roll's added value.
-        penetrating: bool,
-        /// The condition for explosion (defaults to max value).
-        condition: Option<Condition>,
-    },
-    /// Reroll dice matching the condition.
-    Reroll {
-        /// If true, only reroll once per die.
-        once: bool,
-        /// The condition for reroll (defaults to 1).
-        condition: Option<Condition>,
-    },
-    /// Count successes: count dice matching condition instead of summing.
-    CountSuccesses(Condition),
 }
 
 /// A comparison condition for explode/reroll.
@@ -166,21 +187,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_roll_has_crit_fields() {
-        let roll = Roll {
-            count: 1,
-            kind: DieKind::Number(20),
+    fn test_roll_plan_has_annotation_rules() {
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(20),
+            },
             modifiers: vec![],
-            crit_success: Some(Condition {
-                compare: Compare::Equal,
-                value: 20,
-            }),
-            crit_failure: Some(Condition {
-                compare: Compare::Equal,
-                value: 1,
-            }),
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![
+                AnnotationRule::CriticalSuccess(Condition {
+                    compare: Compare::Equal,
+                    value: 20,
+                }),
+                AnnotationRule::CriticalFailure(Condition {
+                    compare: Compare::Equal,
+                    value: 1,
+                }),
+            ],
         };
-        assert!(roll.crit_success.is_some());
-        assert!(roll.crit_failure.is_some());
+        assert!(plan
+            .annotation_rules
+            .iter()
+            .any(|r| matches!(r, AnnotationRule::CriticalSuccess(_))));
+        assert!(plan
+            .annotation_rules
+            .iter()
+            .any(|r| matches!(r, AnnotationRule::CriticalFailure(_))));
     }
 }

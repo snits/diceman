@@ -36,7 +36,10 @@ pub mod parser;
 pub mod roller;
 pub mod sim;
 
-pub use ast::{Compare, Condition, Expr, Modifier, Op, Roll, DieKind};
+pub use ast::{
+    AnnotationRule, Compare, Condition, DicePool, DieKind, Expr, Op, RollModifier, RollPlan,
+    ScoringMode,
+};
 pub use error::{Error, Result};
 pub use roller::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
 pub use sim::{simulate, simulate_seeded, SimResult};
@@ -79,13 +82,13 @@ pub fn roll_with_rng(expr: &str, rng: &mut impl Rng) -> Result<RollResult> {
 /// # Examples
 ///
 /// ```
-/// use diceman::{parse, Expr, Roll, DieKind, Modifier};
+/// use diceman::{parse, Expr, RollPlan, DieKind};
 ///
 /// let expr = diceman::parse("4d6kh3").unwrap();
 /// match expr {
-///     Expr::Roll(roll) => {
-///         assert_eq!(roll.count, 4);
-///         assert_eq!(roll.kind, DieKind::Number(6));
+///     Expr::Roll(plan) => {
+///         assert_eq!(plan.pool.count, 4);
+///         assert_eq!(plan.pool.kind, DieKind::Number(6));
 ///     }
 ///     _ => panic!("Expected a roll"),
 /// }
@@ -162,10 +165,10 @@ mod tests {
     fn test_parse() {
         let expr = parse("4d6kh3").unwrap();
         match expr {
-            Expr::Roll(roll) => {
-                assert_eq!(roll.count, 4);
-                assert_eq!(roll.kind, DieKind::Number(6));
-                assert_eq!(roll.modifiers.len(), 1);
+            Expr::Roll(plan) => {
+                assert_eq!(plan.pool.count, 4);
+                assert_eq!(plan.pool.kind, DieKind::Number(6));
+                assert_eq!(plan.modifiers.len(), 1);
             }
             _ => panic!("Expected a roll"),
         }
