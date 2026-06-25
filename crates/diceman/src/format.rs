@@ -1,7 +1,7 @@
 // ABOUTME: Formatting logic for dice roll results into human-readable strings.
 // ABOUTME: Converts roll data (dice values, modifiers, crits) into display expressions.
 
-use crate::ast::{Compare, Condition, Modifier, Roll, Sides};
+use crate::ast::{Compare, Condition, Modifier, Roll, DieKind};
 use crate::roller::{DieResult, RollResult};
 use std::fmt;
 
@@ -21,10 +21,10 @@ pub(crate) fn format_roll(
     total: i64,
     success_condition: Option<&Condition>,
 ) -> String {
-    let sides_str = match roll.sides {
-        Sides::Number(n) => n.to_string(),
-        Sides::Percent => "%".to_string(),
-        Sides::Fudge => "F".to_string(),
+    let kind_str = match roll.kind {
+        DieKind::Number(n) => n.to_string(),
+        DieKind::Percent => "%".to_string(),
+        DieKind::Fudge => "F".to_string(),
     };
 
     let modifiers_str: String = roll
@@ -113,12 +113,12 @@ pub(crate) fn format_roll(
         let success_word = if total == 1 { "success" } else { "successes" };
         format!(
             "{}d{}{}{}[{}] = {} {}",
-            roll.count, sides_str, modifiers_str, crit_str, dice_str, total, success_word
+            roll.count, kind_str, modifiers_str, crit_str, dice_str, total, success_word
         )
     } else {
         format!(
             "{}d{}{}{}[{}] = {}",
-            roll.count, sides_str, modifiers_str, crit_str, dice_str, total
+            roll.count, kind_str, modifiers_str, crit_str, dice_str, total
         )
     }
 }
