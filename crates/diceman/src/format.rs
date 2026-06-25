@@ -18,6 +18,37 @@ impl fmt::Display for RollResult {
 /// Produces output like "4d6kh3[6, 5, 4, (1)] = 15" showing the notation,
 /// individual die values (with dropped/crit markers), and the total.
 pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
+    match plan.scoring {
+        ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
+        ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
+            format_standard_roll(plan, dice, total)
+        }
+    }
+}
+
+/// Format a digit-concatenation roll (e.g., D66: "D66[3, 5] = 35").
+///
+/// Digit dice carry no modifiers or annotations from the parser, so dropped
+/// dice and crit markers do not arise here; values render plain.
+fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
+    let sides = match plan.pool.kind {
+        DieKind::Number(n) => n.to_string(),
+        // The parser only pairs DigitConcatenate with DieKind::Number.
+        DieKind::Percent | DieKind::Fudge => {
+            unreachable!("DigitConcatenate requires DieKind::Number")
+        }
+    };
+    let prefix = std::iter::repeat_n(sides.as_str(), plan.pool.count as usize).collect::<String>();
+    let dice_str = dice
+        .iter()
+        .map(|d| d.value.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("D{}[{}] = {}", prefix, dice_str, total)
+}
+
+/// Format a standard (sum or success-counting) roll.
+fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
     let kind_str = match plan.pool.kind {
         DieKind::Number(n) => n.to_string(),
         DieKind::Percent => "%".to_string(),
@@ -69,6 +100,8 @@ pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> St
             Some(cond)
         }
         ScoringMode::Sum => None,
+        // Routed to format_digit_roll before reaching here.
+        ScoringMode::DigitConcatenate => unreachable!(),
     };
 
     // Render crit markers: cs before cf, at most one of each.
