@@ -41,7 +41,7 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
     let prefix = std::iter::repeat_n(sides.as_str(), plan.pool.count as usize).collect::<String>();
     let dice_str = dice
         .iter()
-        .map(|d| d.value.to_string())
+        .map(|d| d.face.to_string())
         .collect::<Vec<_>>()
         .join(", ");
     format!("D{}[{}] = {}", prefix, dice_str, total)
@@ -116,19 +116,22 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         .iter()
         .map(|d| {
             if d.dropped {
-                format!("({})", d.value)
+                format!("({})", d.face)
             } else if d.is_crit_success {
-                format!("{}**", d.value)
+                format!("{}**", d.face)
             } else if d.is_crit_failure {
-                format!("{}*", d.value)
+                format!("{}*", d.face)
             } else if let Some(condition) = success_condition {
-                if condition.compare.check(d.value, condition.value) {
-                    format!("{}*", d.value) // Success counting marker
+                if condition
+                    .compare
+                    .check(d.face.as_numeric(), condition.value)
+                {
+                    format!("{}*", d.face) // Success counting marker
                 } else {
-                    d.value.to_string()
+                    d.face.to_string()
                 }
             } else {
-                d.value.to_string()
+                d.face.to_string()
             }
         })
         .collect::<Vec<_>>()
