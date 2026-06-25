@@ -16,13 +16,6 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    /// A digit dice roll (e.g., D66 = roll 2d6, read as two-digit number).
-    DigitRoll {
-        /// Number of sides on each die.
-        sides: u32,
-        /// Number of dice (digits) to roll.
-        count: u32,
-    },
     /// A parenthesized group.
     Group(Box<Expr>),
 }
@@ -86,6 +79,8 @@ pub enum ScoringMode {
     Sum,
     /// Count dice matching the condition instead of summing.
     CountSuccesses(Condition),
+    /// Concatenate non-dropped die values as digits (e.g., D66: 3, 5 -> 35).
+    DigitConcatenate,
 }
 
 /// A rule that detects an interesting outcome (descriptive only; no gameplay effect).

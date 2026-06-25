@@ -472,6 +472,10 @@ Introduce:
 
 Continue using numeric results.
 
+ScoringMode is introduced with only `Sum` and `CountSuccesses`. The
+`DigitConcatenate` variant (D66) is deferred — `Expr::DigitRoll` keeps its
+existing separate path until Phase 5 folds it into the unified pipeline.
+
 ⸻
 
 Phase 3
@@ -499,6 +503,10 @@ apply_modifiers()
 score()
 apply_annotations()
 format()
+
+Folds the D66 / `Expr::DigitRoll` path into this pipeline as a
+`DicePool` with `ScoringMode::DigitConcatenate`, retiring the separate
+`evaluate_digit_roll` evaluator path.
 
 ⸻
 
