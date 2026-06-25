@@ -3,7 +3,7 @@
 
 use crate::ast::{
     AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op, RollModifier,
-    RollPlan, ScoringMode,
+    RollOutcome, RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -92,8 +92,8 @@ pub struct DieResult {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RollResult {
-    /// The total value of the expression.
-    pub total: i64,
+    /// The scored outcome of the expression.
+    pub outcome: RollOutcome,
     /// Individual die results (if the expression was a roll).
     pub dice: Vec<DieResult>,
     /// Formatted expression showing the roll.
@@ -120,7 +120,7 @@ pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
         rng,
         total_only: true,
     };
-    Ok(evaluator.evaluate(expr)?.total)
+    Ok(evaluator.evaluate(expr)?.outcome.as_numeric())
 }
 
 struct Evaluator<'a, R: Rng> {
@@ -132,7 +132,7 @@ impl<R: Rng> Evaluator<'_, R> {
     fn evaluate(&mut self, expr: &Expr) -> Result<RollResult> {
         match expr {
             Expr::Number(n) => Ok(RollResult {
-                total: *n,
+                outcome: RollOutcome::Numeric(*n),
                 dice: vec![],
                 expression: if self.total_only {
                     String::new()
@@ -144,15 +144,17 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::BinOp { op, left, right } => {
                 let left_result = self.evaluate(left)?;
                 let right_result = self.evaluate(right)?;
+                let left = left_result.outcome.as_numeric();
+                let right = right_result.outcome.as_numeric();
                 let total = match op {
-                    Op::Add => left_result.total + right_result.total,
-                    Op::Sub => left_result.total - right_result.total,
-                    Op::Mul => left_result.total * right_result.total,
+                    Op::Add => left + right,
+                    Op::Sub => left - right,
+                    Op::Mul => left * right,
                     Op::Div => {
-                        if right_result.total == 0 {
+                        if right == 0 {
                             return Err(Error::DivisionByZero);
                         }
-                        left_result.total / right_result.total
+                        left / right
                     }
                 };
                 let expression = if self.total_only {
@@ -164,7 +166,7 @@ impl<R: Rng> Evaluator<'_, R> {
                     )
                 };
                 Ok(RollResult {
-                    total,
+                    outcome: RollOutcome::Numeric(total),
                     dice: vec![],
                     expression,
                 })
@@ -172,7 +174,7 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::Group(inner) => {
                 let result = self.evaluate(inner)?;
                 Ok(RollResult {
-                    total: result.total,
+                    outcome: result.outcome,
                     dice: result.dice,
                     expression: if self.total_only {
                         String::new()
@@ -188,17 +190,17 @@ impl<R: Rng> Evaluator<'_, R> {
         // Pipeline: roll_pool -> apply_modifiers -> score -> apply_annotations -> format
         let mut dice = self.roll_pool(&plan.pool);
         self.apply_modifiers(&mut dice, &plan.pool.kind, &plan.modifiers)?;
-        let total = Self::score(&dice, &plan.scoring);
+        let outcome = Self::score(&dice, &plan.scoring);
 
         let expression = if self.total_only {
             String::new()
         } else {
             Self::apply_annotations(&mut dice, &plan.annotation_rules);
-            format::format_roll(plan, &dice, total)
+            format::format_roll(plan, &dice, outcome)
         };
 
         Ok(RollResult {
-            total,
+            outcome,
             dice,
             expression,
         })
@@ -248,27 +250,30 @@ impl<R: Rng> Evaluator<'_, R> {
         Ok(())
     }
 
-    /// Convert modified dice into a final numeric result per the scoring mode.
-    fn score(dice: &[DieResult], scoring: &ScoringMode) -> i64 {
+    /// Convert modified dice into a final outcome per the scoring mode.
+    fn score(dice: &[DieResult], scoring: &ScoringMode) -> RollOutcome {
         match scoring {
-            ScoringMode::Sum => dice
-                .iter()
-                .filter(|d| !d.dropped)
-                .map(|d| d.face.as_numeric())
-                .sum(),
-            ScoringMode::CountSuccesses(condition) => dice
-                .iter()
-                .filter(|d| !d.dropped)
-                .filter(|d| {
-                    condition
-                        .compare
-                        .check(d.face.as_numeric(), condition.value)
-                })
-                .count() as i64,
-            ScoringMode::DigitConcatenate => dice
-                .iter()
-                .filter(|d| !d.dropped)
-                .fold(0i64, |acc, d| acc * 10 + d.face.as_numeric()),
+            ScoringMode::Sum => RollOutcome::Numeric(
+                dice.iter()
+                    .filter(|d| !d.dropped)
+                    .map(|d| d.face.as_numeric())
+                    .sum(),
+            ),
+            ScoringMode::CountSuccesses(condition) => RollOutcome::Successes(
+                dice.iter()
+                    .filter(|d| !d.dropped)
+                    .filter(|d| {
+                        condition
+                            .compare
+                            .check(d.face.as_numeric(), condition.value)
+                    })
+                    .count() as i64,
+            ),
+            ScoringMode::DigitConcatenate => RollOutcome::Numeric(
+                dice.iter()
+                    .filter(|d| !d.dropped)
+                    .fold(0i64, |acc, d| acc * 10 + d.face.as_numeric()),
+            ),
         }
     }
 
@@ -558,7 +563,7 @@ mod tests {
     fn test_evaluate_number() {
         let expr = Expr::Number(42);
         let result = evaluate(&expr).unwrap();
-        assert_eq!(result.total, 42);
+        assert_eq!(result.outcome, RollOutcome::Numeric(42));
     }
 
     #[test]
@@ -575,7 +580,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 7);
+        assert_eq!(result.outcome, RollOutcome::Numeric(7));
     }
 
     #[test]
@@ -592,7 +597,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Should keep 5, 3, 6 = 14
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 14);
+        assert_eq!(result.outcome, RollOutcome::Numeric(14));
     }
 
     #[test]
@@ -612,7 +617,7 @@ mod tests {
         };
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 12); // 3 + 4 + 5
+        assert_eq!(result.outcome, RollOutcome::Numeric(12)); // 3 + 4 + 5
     }
 
     #[test]
@@ -629,7 +634,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 2, 3, 2]); // -1, 0, 1, 0 = 0
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 0);
+        assert_eq!(result.outcome, RollOutcome::Numeric(0));
     }
 
     #[test]
@@ -646,7 +651,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 1, keep 5+3+6 = 14
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 14);
+        assert_eq!(result.outcome, RollOutcome::Numeric(14));
     }
 
     #[test]
@@ -663,7 +668,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 3, 6]); // Drop 6, keep 1+5+3 = 9
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 9);
+        assert_eq!(result.outcome, RollOutcome::Numeric(9));
     }
 
     #[test]
@@ -683,7 +688,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]); // 10, 8, 9 >= 8 = 3 successes
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 3);
+        assert_eq!(result.outcome, RollOutcome::Successes(3));
     }
 
     #[test]
@@ -703,7 +708,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 2, 3]); // No 6s = 0 successes
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 0);
+        assert_eq!(result.outcome, RollOutcome::Successes(0));
     }
 
     #[test]
@@ -738,7 +743,7 @@ mod tests {
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         // 5d10 -> [10, 7, 8, 3, 9]; keep highest 3 keeps 10, 8, 9 and drops
         // 7, 3; successes >= 8 among kept = 10, 8, 9 = 3.
-        assert_eq!(result.total, 3);
+        assert_eq!(result.outcome, RollOutcome::Successes(3));
         assert_eq!(
             result.expression,
             "5d10kh3>=8[10*, (7), 8*, (3), 9*] = 3 successes"
@@ -765,7 +770,7 @@ mod tests {
         // Added: 6 + (6-1) + (4-1) = 6 + 5 + 3 = 14
         let mut rng = TestRng::new(vec![6, 6, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 14);
+        assert_eq!(result.outcome, RollOutcome::Numeric(14));
     }
 
     #[test]
@@ -788,7 +793,7 @@ mod tests {
         // Total: 4 (no -1 because no explosion occurred)
         let mut rng = TestRng::new(vec![4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 4);
+        assert_eq!(result.outcome, RollOutcome::Numeric(4));
     }
 
     #[test]
@@ -811,7 +816,7 @@ mod tests {
         // Result: 2 dice with values 6 and 4
         let mut rng = TestRng::new(vec![6, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 10); // 6 + 4
+        assert_eq!(result.outcome, RollOutcome::Numeric(10)); // 6 + 4
         assert_eq!(result.dice.len(), 2); // Two separate dice
     }
 
@@ -835,7 +840,7 @@ mod tests {
         // Result: 4 dice with values 6, 6, 6, 4
         let mut rng = TestRng::new(vec![6, 6, 6, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 22); // 6 + 6 + 6 + 4
+        assert_eq!(result.outcome, RollOutcome::Numeric(22)); // 6 + 6 + 6 + 4
         assert_eq!(result.dice.len(), 4); // Four separate dice
     }
 
@@ -859,7 +864,7 @@ mod tests {
         // Result: 1 die with value 6 + 6 + 4 = 16
         let mut rng = TestRng::new(vec![6, 6, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 16); // 6 + 6 + 4
+        assert_eq!(result.outcome, RollOutcome::Numeric(16)); // 6 + 6 + 4
         assert_eq!(result.dice.len(), 1); // One die with compounded value
     }
 
@@ -887,7 +892,7 @@ mod tests {
         // Result: 3 dice (6, 5, 3), keep highest 2 (6, 5)
         let mut rng = TestRng::new(vec![6, 3, 5]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 11); // 6 + 5 (3 dropped)
+        assert_eq!(result.outcome, RollOutcome::Numeric(11)); // 6 + 5 (3 dropped)
         assert_eq!(result.dice.len(), 3); // Three dice total
         assert_eq!(result.dice.iter().filter(|d| !d.dropped).count(), 2); // 2 kept
     }
@@ -912,7 +917,7 @@ mod tests {
         // Result: 2 dice with values 6 and 3 (4-1 penetrating)
         let mut rng = TestRng::new(vec![6, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 9); // 6 + 3 (4-1)
+        assert_eq!(result.outcome, RollOutcome::Numeric(9)); // 6 + 3 (4-1)
         assert_eq!(result.dice.len(), 2); // Two separate dice
         assert_eq!(result.dice[0].face.as_numeric(), 6);
         assert_eq!(result.dice[1].face.as_numeric(), 3); // 4-1 penetrating
@@ -1011,14 +1016,14 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![20, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 21); // 20 + 1, crits don't change value
+        assert_eq!(result.outcome, RollOutcome::Numeric(21)); // 20 + 1, crits don't change value
     }
 
     #[test]
     fn test_evaluate_digit_dice_d66() {
         let mut rng = TestRng::new(vec![3, 5]);
         let result = evaluate_with_rng(&digit_plan(2, 6), &mut rng).unwrap();
-        assert_eq!(result.total, 35); // digits: 3, 5 → 35
+        assert_eq!(result.outcome, RollOutcome::Numeric(35)); // digits: 3, 5 → 35
         assert_eq!(result.dice.len(), 2);
         assert_eq!(result.expression, "D66[3, 5] = 35");
     }
@@ -1027,7 +1032,7 @@ mod tests {
     fn test_evaluate_digit_dice_d666() {
         let mut rng = TestRng::new(vec![1, 4, 6]);
         let result = evaluate_with_rng(&digit_plan(3, 6), &mut rng).unwrap();
-        assert_eq!(result.total, 146); // digits: 1, 4, 6 → 146
+        assert_eq!(result.outcome, RollOutcome::Numeric(146)); // digits: 1, 4, 6 → 146
         assert_eq!(result.dice.len(), 3);
         assert_eq!(result.expression, "D666[1, 4, 6] = 146");
     }
@@ -1036,7 +1041,7 @@ mod tests {
     fn test_evaluate_digit_dice_d44() {
         let mut rng = TestRng::new(vec![2, 3]);
         let result = evaluate_with_rng(&digit_plan(2, 4), &mut rng).unwrap();
-        assert_eq!(result.total, 23);
+        assert_eq!(result.outcome, RollOutcome::Numeric(23));
         assert_eq!(result.expression, "D44[2, 3] = 23");
     }
 
@@ -1044,7 +1049,7 @@ mod tests {
     fn test_evaluate_digit_dice_single() {
         let mut rng = TestRng::new(vec![4]);
         let result = evaluate_with_rng(&digit_plan(1, 6), &mut rng).unwrap();
-        assert_eq!(result.total, 4);
+        assert_eq!(result.outcome, RollOutcome::Numeric(4));
         assert_eq!(result.expression, "D6[4] = 4");
     }
 
@@ -1052,14 +1057,14 @@ mod tests {
     fn test_evaluate_digit_dice_max_d66() {
         let mut rng = TestRng::new(vec![6, 6]);
         let result = evaluate_with_rng(&digit_plan(2, 6), &mut rng).unwrap();
-        assert_eq!(result.total, 66);
+        assert_eq!(result.outcome, RollOutcome::Numeric(66));
     }
 
     #[test]
     fn test_evaluate_digit_dice_min_d66() {
         let mut rng = TestRng::new(vec![1, 1]);
         let result = evaluate_with_rng(&digit_plan(2, 6), &mut rng).unwrap();
-        assert_eq!(result.total, 11);
+        assert_eq!(result.outcome, RollOutcome::Numeric(11));
     }
 
     #[test]
@@ -1120,7 +1125,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 5, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 9); // 4 (rerolled from 1) + 5
+        assert_eq!(result.outcome, RollOutcome::Numeric(9)); // 4 (rerolled from 1) + 5
     }
 
     #[test]
@@ -1142,7 +1147,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![1, 1]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 1); // Rerolled once to 1, kept because once=true
+        assert_eq!(result.outcome, RollOutcome::Numeric(1)); // Rerolled once to 1, kept because once=true
     }
 
     #[test]
@@ -1167,7 +1172,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![2, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 4);
+        assert_eq!(result.outcome, RollOutcome::Numeric(4));
     }
 
     #[test]
@@ -1189,7 +1194,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![5, 3]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 8);
+        assert_eq!(result.outcome, RollOutcome::Numeric(8));
     }
 
     // --- Error path tests ---
@@ -1243,7 +1248,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![2, 5, 3, 6]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 2); // Keep lowest: 2
+        assert_eq!(result.outcome, RollOutcome::Numeric(2)); // Keep lowest: 2
         assert_eq!(result.dice.iter().filter(|d| d.dropped).count(), 3);
     }
 
@@ -1261,7 +1266,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 7); // All kept
+        assert_eq!(result.outcome, RollOutcome::Numeric(7)); // All kept
     }
 
     #[test]
@@ -1278,7 +1283,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![42]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 42);
+        assert_eq!(result.outcome, RollOutcome::Numeric(42));
     }
 
     #[test]
@@ -1295,7 +1300,7 @@ mod tests {
         let expr = Expr::Roll(plan);
         let mut rng = TestRng::new(vec![100]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
-        assert_eq!(result.total, 100);
+        assert_eq!(result.outcome, RollOutcome::Numeric(100));
     }
 
     #[test]
@@ -1306,15 +1311,33 @@ mod tests {
             right: Box::new(Expr::Number(5)),
         };
         let result = evaluate(&expr).unwrap();
-        assert_eq!(result.total, -5);
+        assert_eq!(result.outcome, RollOutcome::Numeric(-5));
     }
 
     #[test]
     fn test_evaluate_group() {
         let expr = Expr::Group(Box::new(Expr::Number(42)));
         let result = evaluate(&expr).unwrap();
-        assert_eq!(result.total, 42);
+        assert_eq!(result.outcome, RollOutcome::Numeric(42));
         assert!(result.expression.contains("(42)"));
+    }
+
+    #[test]
+    fn test_arithmetic_with_success_counting_operand() {
+        // 5d10>=8 + 2: success count (3) + 2, produced as a Numeric outcome.
+        let expr = crate::parse("5d10>=8 + 2").unwrap();
+        let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]); // 10, 8, 9 >= 8 → 3 successes
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(5));
+    }
+
+    #[test]
+    fn test_group_propagates_successes_outcome() {
+        // (5d10>=8): grouping preserves the success-counting outcome.
+        let expr = crate::parse("(5d10>=8)").unwrap();
+        let mut rng = TestRng::new(vec![10, 7, 8, 3, 9]); // 10, 8, 9 >= 8 → 3 successes
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Successes(3));
     }
 
     #[test]
@@ -1343,12 +1366,12 @@ mod tests {
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
-    use crate::ast::DieFace;
+    use crate::ast::{DieFace, RollOutcome};
 
     #[test]
     fn roll_result_serializes_to_json() {
         let result = RollResult {
-            total: 7,
+            outcome: RollOutcome::Numeric(7),
             dice: vec![
                 DieResult {
                     face: DieFace::Numeric(6),
@@ -1370,7 +1393,7 @@ mod serde_tests {
 
         let json = serde_json::to_value(&result).unwrap();
 
-        assert_eq!(json["total"], 7);
+        assert_eq!(json["outcome"]["Numeric"], 7);
         assert_eq!(json["expression"], "2d6");
         assert_eq!(json["dice"][0]["face"]["Numeric"], 6);
         assert_eq!(json["dice"][0]["history"][0]["Numeric"], 6);

@@ -38,7 +38,7 @@ pub mod sim;
 
 pub use ast::{
     AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op, RollModifier,
-    RollPlan, ScoringMode,
+    RollOutcome, RollPlan, ScoringMode,
 };
 pub use error::{Error, Result};
 pub use roller::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
@@ -50,7 +50,7 @@ pub use sim::{simulate, simulate_seeded, SimResult};
 ///
 /// ```
 /// let result = diceman::roll("2d6 + 5").unwrap();
-/// println!("Total: {}", result.total);
+/// println!("Total: {}", result.outcome.as_numeric());
 /// println!("Expression: {}", result.expression);
 /// ```
 pub fn roll(expr: &str) -> Result<RollResult> {
@@ -124,19 +124,19 @@ mod tests {
     #[test]
     fn test_roll_basic() {
         let result = roll("2d6").unwrap();
-        assert!(result.total >= 2 && result.total <= 12);
+        assert!(result.outcome.as_numeric() >= 2 && result.outcome.as_numeric() <= 12);
     }
 
     #[test]
     fn test_roll_with_modifier() {
         let result = roll("4d6kh3").unwrap();
-        assert!(result.total >= 3 && result.total <= 18);
+        assert!(result.outcome.as_numeric() >= 3 && result.outcome.as_numeric() <= 18);
     }
 
     #[test]
     fn test_roll_expression() {
         let result = roll("2d6 + 5").unwrap();
-        assert!(result.total >= 7 && result.total <= 17);
+        assert!(result.outcome.as_numeric() >= 7 && result.outcome.as_numeric() <= 17);
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         let mut rng = FastRng::with_seed(42);
         let result2 = roll_with_rng("2d6", &mut rng).unwrap();
 
-        assert_eq!(result1.total, result2.total);
+        assert_eq!(result1.outcome.as_numeric(), result2.outcome.as_numeric());
     }
 
     #[test]
@@ -186,10 +186,10 @@ mod tests {
     fn test_digit_dice_integration() {
         // D66 should produce values from 11-66 with no 7-9 or 0 digits
         let result = roll("D66").unwrap();
-        assert!(result.total >= 11 && result.total <= 66);
+        assert!(result.outcome.as_numeric() >= 11 && result.outcome.as_numeric() <= 66);
         // Each digit should be 1-6
-        let tens = result.total / 10;
-        let ones = result.total % 10;
+        let tens = result.outcome.as_numeric() / 10;
+        let ones = result.outcome.as_numeric() % 10;
         assert!((1..=6).contains(&tens));
         assert!((1..=6).contains(&ones));
     }
@@ -209,7 +209,7 @@ mod tests {
         // Test crit success marker
         let mut rng = TestRng::new(vec![20]);
         let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
-        assert_eq!(result.total, 20);
+        assert_eq!(result.outcome.as_numeric(), 20);
         assert!(
             result.expression.contains("20**"),
             "Expected crit success marker ** in output: {}",
@@ -219,7 +219,7 @@ mod tests {
         // Test crit failure marker
         let mut rng = TestRng::new(vec![1]);
         let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
-        assert_eq!(result.total, 1);
+        assert_eq!(result.outcome.as_numeric(), 1);
         assert!(
             result.expression.contains("1*"),
             "Expected crit failure marker * in output: {}",
@@ -229,7 +229,7 @@ mod tests {
         // Test normal roll (no markers)
         let mut rng = TestRng::new(vec![10]);
         let result = roll_with_rng("1d20cs20cf1", &mut rng).unwrap();
-        assert_eq!(result.total, 10);
+        assert_eq!(result.outcome.as_numeric(), 10);
         assert!(
             !result.expression.contains("10*") && !result.expression.contains("10**"),
             "Expected no crit markers for normal roll: {}",
@@ -239,7 +239,7 @@ mod tests {
         // Test expanded crit range
         let mut rng = TestRng::new(vec![19]);
         let result = roll_with_rng("1d20cs>=19cf1", &mut rng).unwrap();
-        assert_eq!(result.total, 19);
+        assert_eq!(result.outcome.as_numeric(), 19);
         assert!(
             result.expression.contains("19**"),
             "Expected crit success marker ** for 19 in expanded range: {}",
@@ -256,7 +256,7 @@ mod tests {
         // After reroll: [4, 5, 3, 6], keep highest 3: 6+5+4=15
         let mut rng = TestRng::new(vec![1, 5, 3, 6, 4]);
         let result = roll_with_rng("4d6rkh3", &mut rng).unwrap();
-        assert_eq!(result.total, 15);
+        assert_eq!(result.outcome.as_numeric(), 15);
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
         // Dice: [6, 3, 4], keep highest 2: 6+4=10
         let mut rng = TestRng::new(vec![6, 3, 4]);
         let result = roll_with_rng("2d6!kh2", &mut rng).unwrap();
-        assert_eq!(result.total, 10);
+        assert_eq!(result.outcome.as_numeric(), 10);
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
         // Total: (3+4) + (2*2) = 11
         let mut rng = TestRng::new(vec![3, 4, 2]);
         let result = roll_with_rng("2d6 + 1d4 * 2", &mut rng).unwrap();
-        assert_eq!(result.total, 11);
+        assert_eq!(result.outcome.as_numeric(), 11);
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         // -5: unary negation (parsed as 0 - 5)
         let mut rng = TestRng::new(vec![1]); // won't be used
         let result = roll_with_rng("-5", &mut rng).unwrap();
-        assert_eq!(result.total, -5);
+        assert_eq!(result.outcome.as_numeric(), -5);
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
         // Total: (4+2)*3 = 18
         let mut rng = TestRng::new(vec![4]);
         let result = roll_with_rng("(1d6 + 2) * 3", &mut rng).unwrap();
-        assert_eq!(result.total, 18);
+        assert_eq!(result.outcome.as_numeric(), 18);
     }
 
     #[test]
