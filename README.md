@@ -180,7 +180,7 @@ use diceman::{roll, simulate};
 
 let result = roll("4d6kh3")?;
 println!("{}", result.expression);  // "4d6kh3[5, 4, 3, 1] = 12"
-println!("{}", result.total);       // 12
+println!("{}", result.outcome.as_numeric());       // 12
 
 let sim = simulate("2d6", 10000)?;
 println!("Mean: {:.2}", sim.mean);

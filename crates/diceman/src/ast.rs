@@ -117,6 +117,26 @@ impl fmt::Display for DieFace {
     }
 }
 
+/// The final outcome of scoring a roll.
+///
+/// `Numeric` covers summed and digit-concatenated results;
+/// `Successes` covers success-counting results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RollOutcome {
+    Numeric(i64),
+    Successes(i64),
+}
+
+impl RollOutcome {
+    /// Return the numeric value of the outcome (the count for `Successes`).
+    pub fn as_numeric(self) -> i64 {
+        match self {
+            RollOutcome::Numeric(n) | RollOutcome::Successes(n) => n,
+        }
+    }
+}
+
 /// The type of dice to roll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DieKind {

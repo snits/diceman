@@ -6,12 +6,29 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
+/// The scored outcome of a dice roll.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone)]
+pub struct RollOutcome {
+    #[pyo3(get)]
+    pub kind: String,
+    #[pyo3(get)]
+    pub value: i64,
+}
+
+#[pymethods]
+impl RollOutcome {
+    fn __repr__(&self) -> String {
+        format!("RollOutcome(kind={}, value={})", self.kind, self.value)
+    }
+}
+
 /// Result of a dice roll.
 #[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct RollResult {
     #[pyo3(get)]
-    pub total: i64,
+    pub outcome: RollOutcome,
     #[pyo3(get)]
     pub expression: String,
 }
@@ -89,20 +106,29 @@ impl SimResult {
 ///     expr: A dice expression like "4d6kh3" or "2d6 + 5"
 ///
 /// Returns:
-///     RollResult with total and formatted expression
+///     RollResult with outcome and formatted expression
 ///
 /// Example:
 ///     >>> result = roll("4d6kh3")
-///     >>> print(result.total)
+///     >>> print(result.outcome.value)
 ///     15
 ///     >>> print(result)
 ///     4d6kh3[6, 5, 4, (1)] = 15
 #[pyfunction]
 fn roll(expr: &str) -> PyResult<RollResult> {
     core::roll(expr)
-        .map(|r| RollResult {
-            total: r.total,
-            expression: r.expression,
+        .map(|r| {
+            let (kind, value) = match r.outcome {
+                core::RollOutcome::Numeric(n) => ("numeric", n),
+                core::RollOutcome::Successes(n) => ("successes", n),
+            };
+            RollResult {
+                outcome: RollOutcome {
+                    kind: kind.to_string(),
+                    value,
+                },
+                expression: r.expression,
+            }
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
@@ -140,6 +166,7 @@ fn simulate(expr: &str, n: usize) -> PyResult<SimResult> {
 fn diceman(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roll, m)?)?;
     m.add_function(wrap_pyfunction!(simulate, m)?)?;
+    m.add_class::<RollOutcome>()?;
     m.add_class::<RollResult>()?;
     m.add_class::<SimResult>()?;
     Ok(())

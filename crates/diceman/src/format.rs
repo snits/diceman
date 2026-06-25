@@ -2,7 +2,7 @@
 // ABOUTME: Converts roll data (dice values, modifiers, crits) into display expressions.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DieKind, RollModifier, RollPlan, ScoringMode,
+    AnnotationRule, Compare, Condition, DieKind, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 use crate::roller::{DieResult, RollResult};
 use std::fmt;
@@ -17,7 +17,8 @@ impl fmt::Display for RollResult {
 ///
 /// Produces output like "4d6kh3[6, 5, 4, (1)] = 15" showing the notation,
 /// individual die values (with dropped/crit markers), and the total.
-pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
+pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutcome) -> String {
+    let total = outcome.as_numeric();
     match plan.scoring {
         ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
         ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
