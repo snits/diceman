@@ -2,7 +2,8 @@
 // ABOUTME: Evaluates parsed AST nodes to produce roll results.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DieKind, Expr, Op, RollModifier, RollPlan, ScoringMode,
+    AnnotationRule, Compare, Condition, DicePool, DieKind, Expr, Op, RollModifier, RollPlan,
+    ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -168,7 +169,6 @@ impl<R: Rng> Evaluator<'_, R> {
                     expression,
                 })
             }
-            Expr::DigitRoll { sides, count } => self.evaluate_digit_roll(*sides, *count),
             Expr::Group(inner) => {
                 let result = self.evaluate(inner)?;
                 Ok(RollResult {
@@ -184,34 +184,17 @@ impl<R: Rng> Evaluator<'_, R> {
         }
     }
 
-    fn evaluate_digit_roll(&mut self, sides: u32, count: u32) -> Result<RollResult> {
-        let dice: Vec<DieResult> = (0..count)
-            .map(|_| {
-                let value = self.rng.roll(sides) as i64;
-                DieResult {
-                    value,
-                    rolls: vec![value],
-                    dropped: false,
-                    is_crit_success: false,
-                    is_crit_failure: false,
-                }
-            })
-            .collect();
-
-        // Concatenate die values as digits to form the total
-        let total: i64 = dice.iter().fold(0i64, |acc, d| acc * 10 + d.value);
+    fn evaluate_roll(&mut self, plan: &RollPlan) -> Result<RollResult> {
+        // Pipeline: roll_pool -> apply_modifiers -> score -> apply_annotations -> format
+        let mut dice = self.roll_pool(&plan.pool);
+        self.apply_modifiers(&mut dice, &plan.pool.kind, &plan.modifiers)?;
+        let total = Self::score(&dice, &plan.scoring);
 
         let expression = if self.total_only {
             String::new()
         } else {
-            let sides_str =
-                std::iter::repeat_n(sides.to_string(), count as usize).collect::<String>();
-            let dice_str = dice
-                .iter()
-                .map(|d| d.value.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("D{}[{}] = {}", sides_str, dice_str, total)
+            Self::apply_annotations(&mut dice, &plan.annotation_rules);
+            format::format_roll(plan, &dice, total)
         };
 
         Ok(RollResult {
@@ -221,11 +204,11 @@ impl<R: Rng> Evaluator<'_, R> {
         })
     }
 
-    fn evaluate_roll(&mut self, plan: &RollPlan) -> Result<RollResult> {
-        // Roll the dice
-        let mut dice: Vec<DieResult> = (0..plan.pool.count)
+    /// Roll a fresh pool of dice, one `DieResult` per die in the pool.
+    fn roll_pool(&mut self, pool: &DicePool) -> Vec<DieResult> {
+        (0..pool.count)
             .map(|_| {
-                let value = self.roll_die(&plan.pool.kind);
+                let value = self.roll_die(&pool.kind);
                 DieResult {
                     value,
                     rolls: vec![value],
@@ -234,61 +217,71 @@ impl<R: Rng> Evaluator<'_, R> {
                     is_crit_failure: false,
                 }
             })
-            .collect();
+            .collect()
+    }
 
-        // Apply modifiers in order: reroll -> explode -> keep/drop
-        for modifier in &plan.modifiers {
+    /// Apply modifiers in order: reroll -> explode -> keep/drop.
+    fn apply_modifiers(
+        &mut self,
+        dice: &mut Vec<DieResult>,
+        kind: &DieKind,
+        modifiers: &[RollModifier],
+    ) -> Result<()> {
+        for modifier in modifiers {
             match modifier {
                 RollModifier::Reroll { once, condition } => {
-                    self.apply_reroll(&mut dice, &plan.pool.kind, *once, condition.as_ref())?;
+                    self.apply_reroll(dice, kind, *once, condition.as_ref())?;
                 }
                 RollModifier::Explode {
                     compounding,
                     penetrating,
                     condition,
                 } => {
-                    self.apply_explode(
-                        &mut dice,
-                        &plan.pool.kind,
-                        *compounding,
-                        *penetrating,
-                        condition.as_ref(),
-                    )?;
+                    self.apply_explode(dice, kind, *compounding, *penetrating, condition.as_ref())?;
                 }
-                RollModifier::KeepHighest(n) => self.apply_keep_highest(&mut dice, *n),
-                RollModifier::KeepLowest(n) => self.apply_keep_lowest(&mut dice, *n),
-                RollModifier::DropHighest(n) => self.apply_drop_highest(&mut dice, *n),
-                RollModifier::DropLowest(n) => self.apply_drop_lowest(&mut dice, *n),
+                RollModifier::KeepHighest(n) => self.apply_keep_highest(dice, *n),
+                RollModifier::KeepLowest(n) => self.apply_keep_lowest(dice, *n),
+                RollModifier::DropHighest(n) => self.apply_drop_highest(dice, *n),
+                RollModifier::DropLowest(n) => self.apply_drop_lowest(dice, *n),
             }
         }
+        Ok(())
+    }
 
-        // Calculate total from the scoring mode
-        let success_condition: Option<&Condition> = match &plan.scoring {
-            ScoringMode::CountSuccesses(cond) => Some(cond),
-            ScoringMode::Sum => None,
-        };
-        let total: i64 = if let Some(condition) = success_condition {
-            dice.iter()
+    /// Convert modified dice into a final numeric result per the scoring mode.
+    fn score(dice: &[DieResult], scoring: &ScoringMode) -> i64 {
+        match scoring {
+            ScoringMode::Sum => dice.iter().filter(|d| !d.dropped).map(|d| d.value).sum(),
+            ScoringMode::CountSuccesses(condition) => dice
+                .iter()
                 .filter(|d| !d.dropped)
                 .filter(|d| condition.compare.check(d.value, condition.value))
-                .count() as i64
-        } else {
-            dice.iter().filter(|d| !d.dropped).map(|d| d.value).sum()
-        };
+                .count() as i64,
+            ScoringMode::DigitConcatenate => dice
+                .iter()
+                .filter(|d| !d.dropped)
+                .fold(0i64, |acc, d| acc * 10 + d.value),
+        }
+    }
 
-        let expression = if self.total_only {
-            String::new()
-        } else {
-            // Mark critical successes/failures (display-only)
-            self.mark_crits(&mut dice, &plan.annotation_rules);
-            format::format_roll(plan, &dice, total)
-        };
-
-        Ok(RollResult {
-            total,
-            dice,
-            expression,
-        })
+    /// Mark critical success/failure annotations on dice (display-only).
+    fn apply_annotations(dice: &mut [DieResult], rules: &[AnnotationRule]) {
+        let success_cond = rules.iter().find_map(|r| match r {
+            AnnotationRule::CriticalSuccess(c) => Some(c),
+            _ => None,
+        });
+        let failure_cond = rules.iter().find_map(|r| match r {
+            AnnotationRule::CriticalFailure(c) => Some(c),
+            _ => None,
+        });
+        for die in dice.iter_mut().filter(|d| !d.dropped) {
+            if let Some(c) = success_cond {
+                die.is_crit_success = c.compare.check(die.value, c.value);
+            }
+            if let Some(c) = failure_cond {
+                die.is_crit_failure = c.compare.check(die.value, c.value);
+            }
+        }
     }
 
     fn roll_die(&mut self, kind: &DieKind) -> i64 {
@@ -479,31 +472,25 @@ impl<R: Rng> Evaluator<'_, R> {
             dice[i].dropped = true;
         }
     }
-
-    fn mark_crits(&self, dice: &mut [DieResult], rules: &[AnnotationRule]) {
-        let success_cond = rules.iter().find_map(|r| match r {
-            AnnotationRule::CriticalSuccess(c) => Some(c),
-            _ => None,
-        });
-        let failure_cond = rules.iter().find_map(|r| match r {
-            AnnotationRule::CriticalFailure(c) => Some(c),
-            _ => None,
-        });
-        for die in dice.iter_mut().filter(|d| !d.dropped) {
-            if let Some(c) = success_cond {
-                die.is_crit_success = c.compare.check(die.value, c.value);
-            }
-            if let Some(c) = failure_cond {
-                die.is_crit_failure = c.compare.check(die.value, c.value);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::DicePool;
+
+    /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
+    fn digit_plan(count: u32, sides: u32) -> Expr {
+        Expr::Roll(RollPlan {
+            pool: DicePool {
+                count,
+                kind: DieKind::Number(sides),
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::DigitConcatenate,
+            annotation_rules: vec![],
+        })
+    }
 
     /// A deterministic RNG for testing.
     struct TestRng {
@@ -1018,9 +1005,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_digit_dice_d66() {
-        let expr = Expr::DigitRoll { sides: 6, count: 2 };
         let mut rng = TestRng::new(vec![3, 5]);
-        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        let result = evaluate_with_rng(&digit_plan(2, 6), &mut rng).unwrap();
         assert_eq!(result.total, 35); // digits: 3, 5 → 35
         assert_eq!(result.dice.len(), 2);
         assert_eq!(result.expression, "D66[3, 5] = 35");
@@ -1028,9 +1014,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_digit_dice_d666() {
-        let expr = Expr::DigitRoll { sides: 6, count: 3 };
         let mut rng = TestRng::new(vec![1, 4, 6]);
-        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        let result = evaluate_with_rng(&digit_plan(3, 6), &mut rng).unwrap();
         assert_eq!(result.total, 146); // digits: 1, 4, 6 → 146
         assert_eq!(result.dice.len(), 3);
         assert_eq!(result.expression, "D666[1, 4, 6] = 146");
@@ -1038,35 +1023,31 @@ mod tests {
 
     #[test]
     fn test_evaluate_digit_dice_d44() {
-        let expr = Expr::DigitRoll { sides: 4, count: 2 };
         let mut rng = TestRng::new(vec![2, 3]);
-        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        let result = evaluate_with_rng(&digit_plan(2, 4), &mut rng).unwrap();
         assert_eq!(result.total, 23);
         assert_eq!(result.expression, "D44[2, 3] = 23");
     }
 
     #[test]
     fn test_evaluate_digit_dice_single() {
-        let expr = Expr::DigitRoll { sides: 6, count: 1 };
         let mut rng = TestRng::new(vec![4]);
-        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        let result = evaluate_with_rng(&digit_plan(1, 6), &mut rng).unwrap();
         assert_eq!(result.total, 4);
         assert_eq!(result.expression, "D6[4] = 4");
     }
 
     #[test]
     fn test_evaluate_digit_dice_max_d66() {
-        let expr = Expr::DigitRoll { sides: 6, count: 2 };
         let mut rng = TestRng::new(vec![6, 6]);
-        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        let result = evaluate_with_rng(&digit_plan(2, 6), &mut rng).unwrap();
         assert_eq!(result.total, 66);
     }
 
     #[test]
     fn test_evaluate_digit_dice_min_d66() {
-        let expr = Expr::DigitRoll { sides: 6, count: 2 };
         let mut rng = TestRng::new(vec![1, 1]);
-        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        let result = evaluate_with_rng(&digit_plan(2, 6), &mut rng).unwrap();
         assert_eq!(result.total, 11);
     }
 

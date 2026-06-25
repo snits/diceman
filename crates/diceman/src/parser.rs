@@ -164,6 +164,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a digit dice roll (D66, D666, D44, etc.).
+    ///
+    /// Lowered into a `RollPlan` whose pool rolls `count` dice of `sides` sides
+    /// and whose scoring concatenates the results as digits.
     fn digit_roll(&mut self) -> Result<Expr> {
         // Consume the 'D'
         self.advance()?;
@@ -182,7 +185,15 @@ impl<'a> Parser<'a> {
         // Decompose into digits and validate all are the same
         let (sides, count) = Self::decompose_digit_dice(value)?;
 
-        Ok(Expr::DigitRoll { sides, count })
+        Ok(Expr::Roll(RollPlan {
+            pool: DicePool {
+                count,
+                kind: DieKind::Number(sides),
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::DigitConcatenate,
+            annotation_rules: vec![],
+        }))
     }
 
     /// Decompose a digit dice value into (sides, count).
@@ -494,6 +505,19 @@ pub fn parse(input: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
+    fn digit_plan(count: u32, sides: u32) -> Expr {
+        Expr::Roll(RollPlan {
+            pool: DicePool {
+                count,
+                kind: DieKind::Number(sides),
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::DigitConcatenate,
+            annotation_rules: vec![],
+        })
+    }
 
     #[test]
     fn test_parse_number() {
@@ -1044,32 +1068,27 @@ mod tests {
 
     #[test]
     fn test_parse_digit_dice_d66() {
-        let expr = parse("D66").unwrap();
-        assert_eq!(expr, Expr::DigitRoll { sides: 6, count: 2 });
+        assert_eq!(parse("D66").unwrap(), digit_plan(2, 6));
     }
 
     #[test]
     fn test_parse_digit_dice_d666() {
-        let expr = parse("D666").unwrap();
-        assert_eq!(expr, Expr::DigitRoll { sides: 6, count: 3 });
+        assert_eq!(parse("D666").unwrap(), digit_plan(3, 6));
     }
 
     #[test]
     fn test_parse_digit_dice_d44() {
-        let expr = parse("D44").unwrap();
-        assert_eq!(expr, Expr::DigitRoll { sides: 4, count: 2 });
+        assert_eq!(parse("D44").unwrap(), digit_plan(2, 4));
     }
 
     #[test]
     fn test_parse_digit_dice_d88() {
-        let expr = parse("D88").unwrap();
-        assert_eq!(expr, Expr::DigitRoll { sides: 8, count: 2 });
+        assert_eq!(parse("D88").unwrap(), digit_plan(2, 8));
     }
 
     #[test]
     fn test_parse_digit_dice_single_d6() {
-        let expr = parse("D6").unwrap();
-        assert_eq!(expr, Expr::DigitRoll { sides: 6, count: 1 });
+        assert_eq!(parse("D6").unwrap(), digit_plan(1, 6));
     }
 
     #[test]
