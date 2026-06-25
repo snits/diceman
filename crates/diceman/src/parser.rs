@@ -1,7 +1,7 @@
 // ABOUTME: Recursive descent parser for dice notation expressions.
 // ABOUTME: Converts token streams into an AST.
 
-use crate::ast::{Compare, Condition, Expr, Modifier, Op, Roll, Sides};
+use crate::ast::{Compare, Condition, Expr, Modifier, Op, Roll, DieKind};
 use crate::error::{Error, Result};
 use crate::lexer::{Lexer, Token};
 
@@ -138,8 +138,8 @@ impl<'a> Parser<'a> {
         // It's a dice roll - consume the 'd'
         self.advance()?;
 
-        // Parse the sides
-        let sides = self.sides()?;
+        // Parse the die kind
+        let kind = self.kind()?;
 
         // Parse any modifiers
         let modifiers = self.modifiers()?;
@@ -157,7 +157,7 @@ impl<'a> Parser<'a> {
 
         Ok(Expr::Roll(Roll {
             count,
-            sides,
+            kind,
             modifiers,
             crit_success,
             crit_failure,
@@ -208,21 +208,21 @@ impl<'a> Parser<'a> {
         Ok((first, digits.len() as u32))
     }
 
-    /// Parse dice sides (number, %, or F).
-    fn sides(&mut self) -> Result<Sides> {
+    /// Parse the die kind (number, %, or F).
+    fn kind(&mut self) -> Result<DieKind> {
         match &self.current {
             Token::Number(n) => {
                 let n = *n;
                 self.advance()?;
-                Ok(Sides::Number(n))
+                Ok(DieKind::Number(n))
             }
             Token::Percent => {
                 self.advance()?;
-                Ok(Sides::Percent)
+                Ok(DieKind::Percent)
             }
             Token::Fudge => {
                 self.advance()?;
-                Ok(Sides::Fudge)
+                Ok(DieKind::Fudge)
             }
             _ => Err(Error::Expected {
                 expected: "dice sides (number, %, or F)".to_string(),
@@ -503,7 +503,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 2,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![],
                 crit_success: None,
                 crit_failure: None,
@@ -518,7 +518,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 4,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::KeepHighest(3)],
                 crit_success: None,
                 crit_failure: None,
@@ -546,7 +546,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: false,
                     penetrating: false,
@@ -565,7 +565,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: false,
                     penetrating: false,
@@ -587,7 +587,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: false,
                     penetrating: true,
@@ -606,7 +606,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: false,
                     penetrating: true,
@@ -628,7 +628,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: true,
                     penetrating: false,
@@ -647,7 +647,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: true,
                     penetrating: true,
@@ -666,7 +666,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: true,
                     penetrating: false,
@@ -688,7 +688,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::Explode {
                     compounding: true,
                     penetrating: true,
@@ -710,7 +710,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Percent,
+                kind: DieKind::Percent,
                 modifiers: vec![],
                 crit_success: None,
                 crit_failure: None,
@@ -725,7 +725,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 4,
-                sides: Sides::Fudge,
+                kind: DieKind::Fudge,
                 modifiers: vec![],
                 crit_success: None,
                 crit_failure: None,
@@ -752,7 +752,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 4,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::DropLowest(1)],
                 crit_success: None,
                 crit_failure: None,
@@ -767,7 +767,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 2,
-                sides: Sides::Number(20),
+                kind: DieKind::Number(20),
                 modifiers: vec![Modifier::DropHighest(1)],
                 crit_success: None,
                 crit_failure: None,
@@ -782,7 +782,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 5,
-                sides: Sides::Number(10),
+                kind: DieKind::Number(10),
                 modifiers: vec![Modifier::CountSuccesses(Condition {
                     compare: Compare::GreaterOrEqual,
                     value: 8,
@@ -800,7 +800,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 6,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::CountSuccesses(Condition {
                     compare: Compare::GreaterThan,
                     value: 4,
@@ -818,7 +818,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 8,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::CountSuccesses(Condition {
                     compare: Compare::Equal,
                     value: 6,
@@ -836,7 +836,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(20),
+                kind: DieKind::Number(20),
                 modifiers: vec![],
                 crit_success: Some(Condition {
                     compare: Compare::Equal,
@@ -854,7 +854,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(20),
+                kind: DieKind::Number(20),
                 modifiers: vec![],
                 crit_success: None,
                 crit_failure: Some(Condition {
@@ -872,7 +872,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(20),
+                kind: DieKind::Number(20),
                 modifiers: vec![],
                 crit_success: Some(Condition {
                     compare: Compare::Equal,
@@ -893,7 +893,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(20),
+                kind: DieKind::Number(20),
                 modifiers: vec![],
                 crit_success: Some(Condition {
                     compare: Compare::GreaterOrEqual,
@@ -938,7 +938,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 4,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![Modifier::KeepHighest(3)],
                 crit_success: Some(Condition {
                     compare: Compare::Equal,
@@ -956,7 +956,7 @@ mod tests {
             expr,
             Expr::Roll(Roll {
                 count: 1,
-                sides: Sides::Number(20),
+                kind: DieKind::Number(20),
                 modifiers: vec![],
                 crit_success: Some(Condition {
                     compare: Compare::Equal,
@@ -1037,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_missing_dice_sides() {
+    fn test_parse_missing_die_kind() {
         let err = parse("2d").unwrap_err();
         assert!(matches!(err, Error::Expected { .. }));
     }
@@ -1073,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_bare_d_no_sides() {
+    fn test_parse_bare_d_no_kind() {
         let err = parse("d").unwrap_err();
         assert!(matches!(err, Error::Expected { .. }));
     }

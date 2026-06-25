@@ -32,8 +32,8 @@ pub enum Expr {
 pub struct Roll {
     /// Number of dice to roll.
     pub count: u32,
-    /// Type of dice (number of sides, percent, or fudge).
-    pub sides: Sides,
+    /// Kind of die (numeric N-sided, percentile, or fudge).
+    pub kind: DieKind,
     /// Modifiers applied to the roll.
     pub modifiers: Vec<Modifier>,
     /// Critical success marker condition.
@@ -44,7 +44,7 @@ pub struct Roll {
 
 /// The type of dice to roll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sides {
+pub enum DieKind {
     /// A die with N sides (d6, d20, etc.).
     Number(u32),
     /// A percentile die (d% = d100).
@@ -53,13 +53,13 @@ pub enum Sides {
     Fudge,
 }
 
-impl Sides {
+impl DieKind {
     /// Returns the number of sides for this die type.
     pub fn count(&self) -> u32 {
         match self {
-            Sides::Number(n) => *n,
-            Sides::Percent => 100,
-            Sides::Fudge => 3, // -1, 0, 1
+            DieKind::Number(n) => *n,
+            DieKind::Percent => 100,
+            DieKind::Fudge => 3, // -1, 0, 1
         }
     }
 }
@@ -169,7 +169,7 @@ mod tests {
     fn test_roll_has_crit_fields() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(20),
+            kind: DieKind::Number(20),
             modifiers: vec![],
             crit_success: Some(Condition {
                 compare: Compare::Equal,

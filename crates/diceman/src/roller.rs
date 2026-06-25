@@ -1,7 +1,7 @@
 // ABOUTME: Dice rolling and expression evaluation logic.
 // ABOUTME: Evaluates parsed AST nodes to produce roll results.
 
-use crate::ast::{Compare, Condition, Expr, Modifier, Op, Roll, Sides};
+use crate::ast::{Compare, Condition, Expr, Modifier, Op, Roll, DieKind};
 use crate::error::{Error, Result};
 use crate::format;
 
@@ -223,7 +223,7 @@ impl<R: Rng> Evaluator<'_, R> {
         // Roll the dice
         let mut dice: Vec<DieResult> = (0..roll.count)
             .map(|_| {
-                let value = self.roll_die(&roll.sides);
+                let value = self.roll_die(&roll.kind);
                 DieResult {
                     value,
                     rolls: vec![value],
@@ -239,7 +239,7 @@ impl<R: Rng> Evaluator<'_, R> {
         for modifier in &roll.modifiers {
             match modifier {
                 Modifier::Reroll { once, condition } => {
-                    self.apply_reroll(&mut dice, &roll.sides, *once, condition.as_ref())?;
+                    self.apply_reroll(&mut dice, &roll.kind, *once, condition.as_ref())?;
                 }
                 Modifier::Explode {
                     compounding,
@@ -248,7 +248,7 @@ impl<R: Rng> Evaluator<'_, R> {
                 } => {
                     self.apply_explode(
                         &mut dice,
-                        &roll.sides,
+                        &roll.kind,
                         *compounding,
                         *penetrating,
                         condition.as_ref(),
@@ -289,18 +289,18 @@ impl<R: Rng> Evaluator<'_, R> {
         })
     }
 
-    fn roll_die(&mut self, sides: &Sides) -> i64 {
-        match sides {
-            Sides::Number(n) => self.rng.roll(*n) as i64,
-            Sides::Percent => self.rng.roll(100) as i64,
-            Sides::Fudge => self.rng.roll(3) as i64 - 2, // -1, 0, 1
+    fn roll_die(&mut self, kind: &DieKind) -> i64 {
+        match kind {
+            DieKind::Number(n) => self.rng.roll(*n) as i64,
+            DieKind::Percent => self.rng.roll(100) as i64,
+            DieKind::Fudge => self.rng.roll(3) as i64 - 2, // -1, 0, 1
         }
     }
 
     fn apply_reroll(
         &mut self,
         dice: &mut [DieResult],
-        sides: &Sides,
+        kind: &DieKind,
         once: bool,
         condition: Option<&Condition>,
     ) -> Result<()> {
@@ -320,7 +320,7 @@ impl<R: Rng> Evaluator<'_, R> {
                 if reroll_count >= MAX_REROLLS {
                     return Err(Error::RerollLimit(MAX_REROLLS));
                 }
-                let new_value = self.roll_die(sides);
+                let new_value = self.roll_die(kind);
                 die.rolls.push(new_value);
                 die.value = new_value;
                 reroll_count += 1;
@@ -337,12 +337,12 @@ impl<R: Rng> Evaluator<'_, R> {
     fn apply_explode(
         &mut self,
         dice: &mut Vec<DieResult>,
-        sides: &Sides,
+        kind: &DieKind,
         compounding: bool,
         penetrating: bool,
         condition: Option<&Condition>,
     ) -> Result<()> {
-        let max_val = sides.count() as i64;
+        let max_val = kind.count() as i64;
         let default_condition = Condition {
             compare: Compare::Equal,
             value: max_val,
@@ -364,7 +364,7 @@ impl<R: Rng> Evaluator<'_, R> {
                     return Err(Error::ExplodeLimit(MAX_EXPLOSIONS));
                 }
 
-                let new_value = self.roll_die(sides);
+                let new_value = self.roll_die(kind);
 
                 // Penetrating: subtract 1 from added value (not from check)
                 let added_value = if penetrating {
@@ -561,7 +561,7 @@ mod tests {
     fn test_evaluate_basic_roll() {
         let roll = Roll {
             count: 2,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![],
             crit_success: None,
             crit_failure: None,
@@ -576,7 +576,7 @@ mod tests {
     fn test_evaluate_keep_highest() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::KeepHighest(3)],
             crit_success: None,
             crit_failure: None,
@@ -593,7 +593,7 @@ mod tests {
             op: Op::Add,
             left: Box::new(Expr::Roll(Roll {
                 count: 2,
-                sides: Sides::Number(6),
+                kind: DieKind::Number(6),
                 modifiers: vec![],
                 crit_success: None,
                 crit_failure: None,
@@ -609,7 +609,7 @@ mod tests {
     fn test_evaluate_fudge() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Fudge,
+            kind: DieKind::Fudge,
             modifiers: vec![],
             crit_success: None,
             crit_failure: None,
@@ -624,7 +624,7 @@ mod tests {
     fn test_evaluate_drop_lowest() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::DropLowest(1)],
             crit_success: None,
             crit_failure: None,
@@ -639,7 +639,7 @@ mod tests {
     fn test_evaluate_drop_highest() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::DropHighest(1)],
             crit_success: None,
             crit_failure: None,
@@ -654,7 +654,7 @@ mod tests {
     fn test_evaluate_count_successes() {
         let roll = Roll {
             count: 5,
-            sides: Sides::Number(10),
+            kind: DieKind::Number(10),
             modifiers: vec![Modifier::CountSuccesses(Condition {
                 compare: Compare::GreaterOrEqual,
                 value: 8,
@@ -672,7 +672,7 @@ mod tests {
     fn test_evaluate_count_successes_zero() {
         let roll = Roll {
             count: 3,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::CountSuccesses(Condition {
                 compare: Compare::Equal,
                 value: 6,
@@ -690,7 +690,7 @@ mod tests {
     fn test_evaluate_count_successes_output_format() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Number(10),
+            kind: DieKind::Number(10),
             modifiers: vec![Modifier::CountSuccesses(Condition {
                 compare: Compare::GreaterOrEqual,
                 value: 8,
@@ -710,7 +710,7 @@ mod tests {
     fn test_evaluate_penetrating_explode() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: true,
                 penetrating: true,
@@ -731,7 +731,7 @@ mod tests {
     fn test_evaluate_penetrating_explode_no_explosion() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: true,
                 penetrating: true,
@@ -752,7 +752,7 @@ mod tests {
     fn test_evaluate_standard_explode_creates_new_dice() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: false,
                 penetrating: false,
@@ -774,7 +774,7 @@ mod tests {
     fn test_evaluate_standard_explode_chain() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: false,
                 penetrating: false,
@@ -796,7 +796,7 @@ mod tests {
     fn test_evaluate_compounding_explode() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: true,
                 penetrating: false,
@@ -818,7 +818,7 @@ mod tests {
     fn test_evaluate_explode_with_keep() {
         let roll = Roll {
             count: 2,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![
                 Modifier::Explode {
                     compounding: false,
@@ -845,7 +845,7 @@ mod tests {
     fn test_evaluate_standard_penetrating_explode() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: false,
                 penetrating: true,
@@ -869,7 +869,7 @@ mod tests {
     fn test_crit_success_marker_output() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(20),
+            kind: DieKind::Number(20),
             modifiers: vec![],
             crit_success: Some(Condition {
                 compare: Compare::Equal,
@@ -888,7 +888,7 @@ mod tests {
     fn test_crit_failure_marker_output() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(20),
+            kind: DieKind::Number(20),
             modifiers: vec![],
             crit_success: None,
             crit_failure: Some(Condition {
@@ -907,7 +907,7 @@ mod tests {
     fn test_crit_both_markers_output() {
         let roll = Roll {
             count: 3,
-            sides: Sides::Number(20),
+            kind: DieKind::Number(20),
             modifiers: vec![],
             crit_success: Some(Condition {
                 compare: Compare::Equal,
@@ -930,7 +930,7 @@ mod tests {
     fn test_crit_no_effect_on_total() {
         let roll = Roll {
             count: 2,
-            sides: Sides::Number(20),
+            kind: DieKind::Number(20),
             modifiers: vec![],
             crit_success: Some(Condition {
                 compare: Compare::Equal,
@@ -1005,7 +1005,7 @@ mod tests {
     fn test_dropped_dice_no_crit_marker() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::KeepHighest(3)],
             crit_success: Some(Condition {
                 compare: Compare::Equal,
@@ -1037,7 +1037,7 @@ mod tests {
         // Rolls: 1 (rerolled), 4 (replacement), 5 (second die, no reroll)
         let roll = Roll {
             count: 2,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Reroll {
                 once: false,
                 condition: None, // defaults to =1
@@ -1057,7 +1057,7 @@ mod tests {
         // Rolls: 1 (matches =1, reroll), 1 (still matches but once=true, stop)
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Reroll {
                 once: true,
                 condition: None, // defaults to =1
@@ -1077,7 +1077,7 @@ mod tests {
         // Rolls: 2 (matches <3, reroll), 4 (does not match, stop)
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Reroll {
                 once: false,
                 condition: Some(Condition {
@@ -1100,7 +1100,7 @@ mod tests {
         // Rolls: 5, 3 — neither matches =1, no reroll
         let roll = Roll {
             count: 2,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Reroll {
                 once: false,
                 condition: None,
@@ -1132,7 +1132,7 @@ mod tests {
         // 1d6r=1 with TestRng always returning 1 — should hit reroll limit
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Reroll {
                 once: false,
                 condition: Some(Condition {
@@ -1153,7 +1153,7 @@ mod tests {
     fn test_evaluate_keep_lowest() {
         let roll = Roll {
             count: 4,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::KeepLowest(1)],
             crit_success: None,
             crit_failure: None,
@@ -1169,7 +1169,7 @@ mod tests {
     fn test_evaluate_keep_lowest_all() {
         let roll = Roll {
             count: 2,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::KeepLowest(5)], // Keep more than rolled
             crit_success: None,
             crit_failure: None,
@@ -1184,7 +1184,7 @@ mod tests {
     fn test_evaluate_percent_dice() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Percent,
+            kind: DieKind::Percent,
             modifiers: vec![],
             crit_success: None,
             crit_failure: None,
@@ -1199,7 +1199,7 @@ mod tests {
     fn test_evaluate_percent_dice_max() {
         let roll = Roll {
             count: 1,
-            sides: Sides::Percent,
+            kind: DieKind::Percent,
             modifiers: vec![],
             crit_success: None,
             crit_failure: None,
@@ -1234,7 +1234,7 @@ mod tests {
         // 1d6!! (compounding) with TestRng always returning 6 — should hit explode limit
         let roll = Roll {
             count: 1,
-            sides: Sides::Number(6),
+            kind: DieKind::Number(6),
             modifiers: vec![Modifier::Explode {
                 compounding: true,
                 penetrating: false,
