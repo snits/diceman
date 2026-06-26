@@ -54,6 +54,10 @@ pub enum Token {
     Lt,
     /// Greater than: '>'.
     Gt,
+    /// Edge modifier: 'e' (Marvel reroll lowest, keep better by rank).
+    Edge,
+    /// Trouble modifier: 't' (Marvel reroll highest, keep worse by rank).
+    Trouble,
     /// End of input.
     Eof,
 }
@@ -120,6 +124,14 @@ impl<'a> Lexer<'a> {
                 Ok(Token::Fudge)
             }
             'm' | 'M' => self.word("marvel", Token::Marvel),
+            'e' | 'E' => {
+                self.chars.next();
+                Ok(Token::Edge)
+            }
+            't' | 'T' => {
+                self.chars.next();
+                Ok(Token::Trouble)
+            }
             '+' => {
                 self.chars.next();
                 Ok(Token::Plus)
@@ -410,5 +422,34 @@ mod tests {
         } else {
             panic!("Expected UnexpectedChar error for 'x' at position 5");
         }
+    }
+
+    #[test]
+    fn test_edge_token_case_insensitive() {
+        for ch in ["e", "E"] {
+            let mut lexer = Lexer::new(ch);
+            assert_eq!(lexer.next_token().unwrap(), Token::Edge);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_trouble_token_case_insensitive() {
+        for ch in ["t", "T"] {
+            let mut lexer = Lexer::new(ch);
+            assert_eq!(lexer.next_token().unwrap(), Token::Trouble);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_marvel_edge_notation_lexes() {
+        let mut lexer = Lexer::new("3dMarvele2");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(3));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Marvel);
+        assert_eq!(lexer.next_token().unwrap(), Token::Edge);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(2));
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
     }
 }

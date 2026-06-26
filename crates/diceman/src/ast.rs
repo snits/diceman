@@ -70,6 +70,29 @@ pub enum RollModifier {
         /// The condition for explosion (defaults to max value).
         condition: Option<Condition>,
     },
+    /// Marvel Edge: reroll the lowest-ranked die, keeping the better result by rank.
+    Edge {
+        /// Number of reroll steps to apply.
+        count: u32,
+        /// Which die to target for each step.
+        policy: EdgePolicy,
+    },
+    /// Marvel Trouble: reroll the highest-ranked die, keeping the worse result by rank.
+    Trouble {
+        /// Number of reroll steps to apply.
+        count: u32,
+    },
+}
+
+/// Which die a Marvel Edge step targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum EdgePolicy {
+    /// Reroll the lowest-ranked die (tie broken by lowest pool index).
+    #[default]
+    RerollLowest,
+    /// Reroll the Marvel die (index 1) until it shows M, then fall back to RerollLowest.
+    ChaseFantastic,
 }
 
 /// How modified dice become a final numeric outcome.
