@@ -51,7 +51,7 @@ ScoringMode::MarvelMultiverse => {
     RollOutcome::Marvel(MarvelOutcome { total, auto_fail, m_shown })
 }
 ```
-Dropped dice: Marvel pools don't use keep/drop (Edge/Trouble reroll in place, never drop), so all 3 are active. (If a Marvel pool somehow has dropped dice, that's a parser error — MarvelD6 rejects kh/kl/dh/dl? **Decision: reject keep/drop modifiers on MarvelD6** at parse time, since Edge/Trouble are the selection mechanic. Flag if this is too strict.)
+Dropped dice: Marvel pools don't use keep/drop (Edge/Trouble reroll in place, never drop), so all 3 are active. MarvelD6 rejects keep/drop, success-counting, generic reroll, and explode modifiers at parse time; Edge/Trouble are the only notation modifiers supported on Marvel pools.
 
 ### 3.4 Outcome — `RollOutcome::Marvel(MarvelOutcome)`
 ```rust
@@ -68,7 +68,11 @@ pub struct MarvelOutcome {
     pub m_shown: bool,    // middle die showed M
 }
 ```
+`MarvelOutcome` derives `Debug`, `Clone`, `Copy`, `PartialEq`, and serde derives behind the existing feature flag so `RollOutcome` can keep its current `Copy` shape.
+
 `RollOutcome::as_numeric()` returns `total` for Marvel (lenient arithmetic extraction, consistent with the Phase 7 BinOp decision). **`as_numeric()` must remain exhaustive** — add the Marvel arm. Arithmetic `3dMarvel + 2` produces `Numeric(total + 2)` (BinOp extracts via `as_numeric`). **Alternate (flag):** `RollOutcome::Structured(GameAgnosticOutcome)` per the doc's game-agnostic intent — deferred to Phase 9 when a second structured system (Genesys) justifies generalizing. Using a concrete `Marvel` variant now is YAGNI-correct.
+
+Generic arithmetic intentionally preserves only the numeric total; Marvel-specific facts (`m_shown`, `auto_fail`, fantastic state) are not carried through `BinOp`. Public Marvel checks must use `roll_marvel` / `simulate_marvel` when those facts matter.
 
 ### 3.5 Fantastic — target-applied, not in the roll outcome
 `MarvelOutcome` is **target-independent** (total, auto_fail, m_shown). Fantastic success/failure requires a target → computed in `simulate_marvel` and the CLI `marvel` subcommand, NOT by `roll("3dMarvel")`. The `MarvelFantastic` **annotation** (§3.6) records "M was shown" on the roll; the success/failure verdict is target-applied elsewhere. This matches the doc's target-independent/target-applied split.
@@ -76,7 +80,8 @@ pub struct MarvelOutcome {
 ### 3.6 Annotation — `AnnotationRule::MarvelFantastic` + pool-level `RollResult.annotations`
 - Add `AnnotationRule::MarvelFantastic` (no condition). Parser **auto-pushes** it for `DieKind::MarvelD6` pools (no notation token needed).
 - Add `pub annotations: Vec<Annotation>` to `RollResult` (pool-level facts — new field; per-die `is_crit_success`/`is_crit_failure` stay as-is for existing crits).
-- `pub enum Annotation { CriticalSuccess, CriticalFailure, Fantastic, AutoFail }` (Phase 8 needs `Fantastic`, `AutoFail`; `CriticalSuccess`/`CriticalFailure` included per doc, wired later). `apply_annotations` pushes `Fantastic` when `m_shown`, `AutoFail` when `auto_fail`.
+- `pub enum Annotation { CriticalSuccess, CriticalFailure, Fantastic, AutoFail }` (Phase 8 needs `Fantastic`, `AutoFail`; `CriticalSuccess`/`CriticalFailure` included per doc, wired later). `apply_annotations(...) -> Vec<Annotation>` mutates per-die crit flags for existing crits and returns pool-level annotations. Public roll evaluation always populates `RollResult.annotations`; number, group, and binary expression results use an empty vector.
+- `apply_annotations` pushes `Fantastic` when `m_shown`, `AutoFail` when `auto_fail`.
 - **Serde:** `RollResult` already derives `Serialize` (serde feature); adding `annotations: Vec<Annotation>` is additive. `Annotation` derives `Serialize` (and `Deserialize`? — match `RollOutcome`/`DieFace` leaf style: both Serialize+Deserialize; `Annotation` is a leaf → both). **Breaking change to JSON shape** (new `annotations` field) — acceptable per Phase 7 precedent (outcome rewrite was breaking) and Jerry's "no backward compat without approval" rule (we're not adding compat). Flag in the commit message.
 
 ### 3.7 Edge/Trouble modifiers
@@ -91,9 +96,9 @@ pub enum RollModifier {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EdgePolicy { #[default] RerollLowest, ChaseFantastic }
 ```
-- **Edge** (RerollLowest): for each of `count` steps, find the lowest-**rank** die, breaking ties by current pool order, roll a fresh face for it, keep the better by rank. **ChaseFantastic**: target the Marvel die (index 1) unless it already shows M, keep better by rank.
+- **Edge** (RerollLowest): for each of `count` steps, find the lowest-**rank** die, breaking ties by current pool order, roll a fresh face for it, keep the better by rank. **ChaseFantastic**: target the Marvel die (index 1) until it shows M; after M is already showing, fall back to the RerollLowest choice for remaining Edge steps. Keep the better die by rank in both cases.
 - **Trouble**: for each of `count` steps, find the highest-rank die (M is rank 7, always best when shown), breaking ties by current pool order, roll fresh, keep the **worse** by rank.
-- **Net cancellation**: edges and troubles cancel 1:1. **Implementation decision:** apply as sequential steps in modifier order `reroll → explode → edge/trouble → ...`? The doc's modifier order is `reroll → explode → keep/drop`. Edge/Trouble are reroll-family; place them **after explode, before keep/drop** (though keep/drop is rejected on Marvel). Cancellation: if both Edge and Trouble present, compute `net = edges.saturating_sub(troubles)` (or vice versa) and apply only the majority side's `count`. **Flag:** the cancellation + sequential-observe semantics need care; the implementer should follow scratchpad §5 exactly and add oracle tests.
+- **Net cancellation:** normalize all Edge/Trouble modifiers on a Marvel pool before applying any of them. Sum Edge counts by policy, sum Trouble counts, cancel 1:1, and apply only the net majority side. With notation, all Edge modifiers use `RerollLowest`, so `3dMarvele2t1`, `3dMarvelt1e2`, and `3dMarvele1` are equivalent. Typed APIs may set all Edge steps to `ChaseFantastic`; mixed Edge policies are not exposed in Phase 8. This must be a pre-application pass, not ordinary sequential modifier order.
 - **Rank function** (Marvel-only, position-aware): `rank(index, face) = if index == 1 && face == 1 { 7 } else { face_value }`. The Edge/Trouble modifier implementation computes this for a MarvelD6 pool.
 - **Notation:** `eN` = `Edge { count: N, policy: RerollLowest }`; `tN` = `Trouble { count: N }`. **ChaseFantastic has NO notation token** (see §3.8) — reachable via `roll_marvel`/`simulate_marvel` API.
 - **Lexer:** add `Token::Edge` ('e'/'E') and `Token::Trouble` ('t'/'T'). 'e' and 't' are currently unused. **Care:** 'e' doesn't clash (explode is '!'); 't' doesn't clash. Parser `modifiers()` adds arms for `Token::Edge` → `edge_modifier()`, `Token::Trouble` → `trouble_modifier()`.
@@ -108,7 +113,7 @@ These construct the `RollPlan` programmatically (or override policy on a parsed 
 
 ### 3.9 Notation token — `Marvel`
 - Lexer: add a word-matcher for `marvel` / `Marvel` (case-insensitive) → `Token::Marvel`. 'm' is currently unused. **Care:** match the whole word; don't single-char it (avoid clashing with future tokens). Reuse the `cs`/`cf` two-char-peek pattern, generalized to a 6-char word.
-- Parser `kind()`: `Token::Marvel` → `DieKind::MarvelD6`. After kind, if kind==MarvelD6: set `scoring = MarvelMultiverse` (default), reject success-counting tokens (`>`/`<`/`=` → error), reject keep/drop modifiers, auto-push `AnnotationRule::MarvelFantastic`.
+- Parser `kind()`: `Token::Marvel` → `DieKind::MarvelD6`. After parsing modifiers and annotation rules, run `validate_roll_plan`. For `MarvelD6`: enforce count, set/validate `ScoringMode::MarvelMultiverse`, reject success-counting tokens (`>`/`<`/`=`), reject keep/drop, generic reroll, generic explode, and user-specified crit annotation rules, and auto-push `AnnotationRule::MarvelFantastic`.
 - Enforce `count == 3` (`Error` variant or reuse `Expected`).
 - `DieKind::MarvelD6` → `count()` returns 6 (six faces) for `roll_die`.
 
@@ -131,8 +136,10 @@ pub struct MarvelSimResult {
 ```
 Per trial: evaluate the plan with the rng → `RollOutcome::Marvel(o)`; `success = (o.total + modifier >= target) && !o.auto_fail`; `fantastic = o.m_shown.then(|| if success { Fantastic::Success } else { Fantastic::Failure })`. Aggregate counts; build `SimResult` from the totals. **Pitfalls (enforce via tests):** aggregate booleans per-trial — never re-derive from the histogram (the total=14 collision); auto-fail overrides success before the `>= target` test. Provide `simulate_marvel_seeded` mirroring `simulate_seeded`.
 
+`SimResult` and `MarvelSimResult` derive serde behind the core feature flag. CLI JSON uses these serde shapes directly rather than hand-building a second Marvel-specific JSON format.
+
 ### 3.12 CLI `marvel` subcommand
-`diceman marvel --edges N --troubles N --target T --modifier M --policy {reroll_lowest,chase_fantastic} [--sim N] [--seed S] [--json]`. Without `--sim`: single `roll_marvel` → print expression + verdict (success / fantastic / auto-fail). With `--sim N`: `simulate_marvel` → print rates (and `--json` serializes `MarvelSimResult`). **Enable core's `serde` feature for the CLI** when `--json` is used (the CLI currently doesn't enable serde; it hand-rolls sim JSON — bead §8 note). Add a `diceman notation` reference section for Marvel.
+`diceman marvel --edges N --troubles N --target T --modifier M --policy {reroll_lowest,chase_fantastic} [--sim N] [--seed S] [--json]`. Without `--sim`: single `roll_marvel` → print expression + verdict (success / fantastic / auto-fail). With `--sim N`: `simulate_marvel` → print rates (and `--json` serializes `MarvelSimResult`). Enable core's `serde` feature unconditionally in the CLI crate so JSON support is compile-time available. Add a `diceman notation` reference section for Marvel.
 
 ### 3.13 Python bindings
 - Pyclass `MarvelOutcome { total, auto_fail, m_shown }` and `MarvelCheck { outcome: MarvelOutcome, target, modifier, success, fantastic }` (fantastic as `"success"`/`"failure"`/`None` string).
@@ -146,27 +153,27 @@ Each task: dispatch implementer (TDD, commit, self-review) → spec-compliance r
 
 ### Task 1 — AST + lexer + parser: MarvelD6 die kind, MarvelMultiverse scoring, MarvelFantastic annotation, notation `3dMarvel`
 **Files:** `ast.rs` (DieKind::MarvelD6, ScoringMode::MarvelMultiverse, AnnotationRule::MarvelFantastic), `lexer.rs` (Token::Marvel word-match), `parser.rs` (kind() arm, count==3 enforcement, auto-push MarvelFantastic, reject success-counting + keep/drop on Marvel), `error.rs` (new error variant if needed), `lib.rs` (re-exports).
-**TDD oracles:** `parse("3dMarvel")` → `RollPlan { count:3, kind:MarvelD6, scoring: MarvelMultiverse, annotation_rules:[MarvelFantastic], modifiers:[] }`. Reject `2dMarvel`, `3dMarvel>=8`, `3dMarvelkh2`. `DieKind::MarvelD6.count() == 6`.
+**TDD oracles:** `parse("3dMarvel")` → `RollPlan { count:3, kind:MarvelD6, scoring: MarvelMultiverse, annotation_rules:[MarvelFantastic], modifiers:[] }`. Reject `2dMarvel`, `3dMarvel>=8`, `3dMarvelkh2`, `3dMarvelk2`, `3dMarvelr`, `3dMarvelro`, `3dMarvel!`, `3dMarvel!!`, `3dMarvel!p`, and `3dMarvelcs6`. `DieKind::MarvelD6.count() == 6`.
 **Gates:** `cargo test -p diceman`, clippy, fmt.
 
 ### Task 2 — Roller: MarvelMultiverse scoring + MarvelOutcome + RollResult.annotations + Annotation enum
 **Files:** `ast.rs` (RollOutcome::Marvel, MarvelOutcome, Annotation enum), `roller.rs` (score arm, RollResult.annotations field, apply_annotations pushes Fantastic/AutoFail for Marvel), `format.rs` (format Marvel rolls: render `3dMarvel[l, M, r] = total` with M marker + auto-fail/fantastic), `lib.rs` (re-exports).
-**TDD oracles (scratchpad §9, exact):** total distribution counts/216 `3:1,4:1,5:3,6:6,7:10,8:15,9:22,10:26,11:28,12:28,13:26,14:20,15:14,16:9,17:5,18:2`; `E[total]=2443/216`; `P(M)=1/6`; `P(autofail)=1/216`. Deterministic TestRng tests for specific face sequences (e.g., `[1,1,1]` → total 3, auto_fail true; `[1,1,6]` → M shown, total 1+6+6=13; `[6,1,6]` → M shown, total 6+6+6=18). `as_numeric()` exhaustive. Serde: `RollOutcome::Marvel` + `annotations` field serialize.
+**TDD oracles (scratchpad §9, exact):** total distribution counts/216 `3:1,4:1,5:3,6:6,7:10,8:15,9:22,10:26,11:28,12:28,13:26,14:20,15:14,16:9,17:5,18:2`; `E[total]=2443/216`; `P(M)=1/6`; `P(autofail)=1/216`. Deterministic TestRng tests for specific face sequences (e.g., `[1,1,1]` → total 3, auto_fail true; `[1,1,6]` → M shown, total 1+6+6=13; `[6,1,6]` → M shown, total 6+6+6=18). `as_numeric()` exhaustive. Serde: `RollOutcome::Marvel` + `annotations` field serialize. `roll("3dMarvel")` exposes `Fantastic` / `AutoFail` through `RollResult.annotations`, independent of display text.
 **Gates:** `cargo test --workspace --features diceman/serde`, clippy (with serde), fmt.
 
 ### Task 3 — Edge/Trouble modifiers: AST + lexer + parser + roller
 **Files:** `ast.rs` (RollModifier::Edge/Trouble, EdgePolicy), `lexer.rs` (Token::Edge, Token::Trouble), `parser.rs` (edge_modifier/trouble_modifier, `eN`/`tN`), `roller.rs` (apply_edge, apply_trouble with position-aware rank, net cancellation), `format.rs` (render `eN`/`tN`).
-**TDD oracles (scratchpad §9):** with pool-order tie break, 1-edge RerollLowest `E[total]=16849/1296 = 13.0007716`, `P(M)=16/81 = 0.19753086`; add exhaustive-enumeration regression oracles for N=1,2,3 because Marvel's positional M semantics are not equivalent to ordinary top-3-of-(3+N) d6. Rank-vs-value keep case: reroll Marvel 3 → keep face 1 = M, rank 7 > 3. Trouble mirror oracles. Cancellation: `e2t1` == `e1` net.
+**TDD oracles (scratchpad §9):** with pool-order tie break, 1-edge RerollLowest `E[total]=16849/1296 = 13.0007716`, `P(M)=16/81 = 0.19753086`; add exact exhaustive-enumeration regression oracles for Edge N=1,2,3 because Marvel's positional M semantics are not equivalent to ordinary top-3-of-(3+N) d6. Rank-vs-value keep case: reroll Marvel 3 → keep face 1 = M, rank 7 > 3. Trouble mirror oracles. Cancellation: exact distributions for `e2t1 == e1`, `t2e1 == t1`, `e1t1 == base`, and order variants such as `t1e2 == e1`.
 **Gates:** full workspace test + clippy + fmt.
 
 ### Task 4 — `roll_marvel` / `simulate_marvel` / `simulate_marvel_seeded` + MarvelSimResult (core)
 **Files:** new `marvel.rs` module? **Decision: NO** — Jerry ratified generic pipeline. Put the typed API + sim in `sim.rs` or a small `marvel_api.rs`? **Prefer:** add `simulate_marvel*` + `MarvelSimResult` to `sim.rs`, and `roll_marvel*` + `MarvelCheck` to `roller.rs` (or a thin `marvel.rs` that reuses the pipeline — NOT a contained evaluator). The typed APIs build/override a `RollPlan` and call `evaluate_with_rng`. **Flag:** exact module placement is the implementer's call; keep it additive, reuse the pipeline, no parallel evaluator.
-**TDD oracles:** `P(M|total=14)=0.25` (fantastic NOT histogram-derivable — assert the sim's fantastic count != histogram-derived); auto-fail overrides success; seeded reproducibility; target-applied fantastic success/failure.
+**TDD oracles:** independent exact enumeration for base, Edge, Trouble, and ChaseFantastic; `P(M|total=14)=0.25` (fantastic NOT histogram-derivable — assert the sim's fantastic count differs from histogram-derived assumptions); auto-fail overrides success; seeded reproducibility; target-applied fantastic success/failure. Monte Carlo tests are only for seeded reproducibility and API smoke.
 **Gates:** full workspace test + clippy + fmt.
 
 ### Task 5 — CLI `marvel` subcommand + enable serde for `--json`
 **Files:** `crates/diceman-cli/src/main.rs` (Commands::Marvel, arg parsing, print verdict / print rates / `--json`), `crates/diceman-cli/Cargo.toml` (enable `diceman/serde` feature), notation reference section.
-**TDD oracles:** CLI arg parsing tests; `--json` output shape; single-roll verdict rendering. (E2E CLI tests via assert_cmd or std::process::Command — match existing CLI test style; the CLI currently has only unit tests on formatters, so add a thin integration test or test the dispatch functions directly.)
+**TDD oracles:** CLI arg parsing tests; `--json` output shape with serde field names; single-roll verdict rendering. Add direct dispatch/format tests first; only add `assert_cmd` if process-level behavior cannot be covered cleanly with the existing test style.
 **Gates:** `cargo test --workspace`, clippy, fmt.
 
 ### Task 6 — Python bindings: `roll_marvel` / `simulate_marvel` + pyclasses
@@ -182,13 +189,11 @@ Each task: dispatch implementer (TDD, commit, self-review) → spec-compliance r
 
 ## 5. Open sub-decisions to surface (implementer should flag, not silently pick)
 
-1. **Reject keep/drop on MarvelD6?** (§3.3) — likely yes, but confirm.
-2. **`RollOutcome::Marvel` vs `Structured(GameAgnosticOutcome)`** (§3.4) — chose Marvel variant (YAGNI); confirm at review.
-3. **Edge/Trouble cancellation + sequential semantics** (§3.7) — follow scratchpad §5 exactly; add oracle tests; flag any deviation.
-4. **Module placement for the typed Marvel API** (§4 Task 4) — implementer's call, additive, reuse pipeline.
-5. **ChaseFantastic notation** (§3.8) — none (API only); confirm acceptable.
-6. **`annotations` field is a breaking JSON-shape change** (§3.6) — flag in commit message; Jerry approved breaking changes in Phase 7, but this is a new field — call it out.
-7. **D3 ruling** (1/M/1 ∩ Fantastic: report both flags) — default applied; one-line change if Jerry rules "suppress."
+1. **`RollOutcome::Marvel` vs `Structured(GameAgnosticOutcome)`** (§3.4) — chose Marvel variant (YAGNI); confirm at review.
+2. **Module placement for the typed Marvel API** (§4 Task 4) — implementer's call, additive, reuse pipeline.
+3. **ChaseFantastic notation** (§3.8) — none (API only); confirm acceptable.
+4. **`annotations` field is a breaking JSON-shape change** (§3.6) — flag in commit message; Jerry approved breaking changes in Phase 7, but this is a new field — call it out.
+5. **D3 ruling** (1/M/1 ∩ Fantastic: report both flags) — default applied; one-line change if Jerry rules "suppress."
 
 ## 6. Validation (run after each task + final)
 
