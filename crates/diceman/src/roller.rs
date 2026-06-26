@@ -190,7 +190,7 @@ impl<R: Rng> Evaluator<'_, R> {
         // Pipeline: roll_pool -> apply_modifiers -> score -> apply_annotations -> format
         let mut dice = self.roll_pool(&plan.pool);
         self.apply_modifiers(&mut dice, &plan.pool.kind, &plan.modifiers)?;
-        let outcome = Self::score(&dice, &plan.scoring);
+        let outcome = Self::score(&dice, &plan.scoring)?;
 
         let expression = if self.total_only {
             String::new()
@@ -251,8 +251,8 @@ impl<R: Rng> Evaluator<'_, R> {
     }
 
     /// Convert modified dice into a final outcome per the scoring mode.
-    fn score(dice: &[DieResult], scoring: &ScoringMode) -> RollOutcome {
-        match scoring {
+    fn score(dice: &[DieResult], scoring: &ScoringMode) -> Result<RollOutcome> {
+        let outcome = match scoring {
             ScoringMode::Sum => RollOutcome::Numeric(
                 dice.iter()
                     .filter(|d| !d.dropped)
@@ -274,7 +274,14 @@ impl<R: Rng> Evaluator<'_, R> {
                     .filter(|d| !d.dropped)
                     .fold(0i64, |acc, d| acc * 10 + d.face.as_numeric()),
             ),
-        }
+            ScoringMode::MarvelMultiverse => {
+                return Err(Error::InvalidMarvelRoll(
+                    "Marvel scoring is unsupported".to_string(),
+                ));
+            }
+        };
+
+        Ok(outcome)
     }
 
     /// Mark critical success/failure annotations on dice (display-only).
@@ -302,6 +309,7 @@ impl<R: Rng> Evaluator<'_, R> {
             DieKind::Number(n) => self.rng.roll(*n) as i64,
             DieKind::Percent => self.rng.roll(100) as i64,
             DieKind::Fudge => self.rng.roll(3) as i64 - 2, // -1, 0, 1
+            DieKind::MarvelD6 => self.rng.roll(6) as i64,
         }
     }
 

@@ -16,6 +16,8 @@ pub enum Token {
     Percent,
     /// 'F' for fudge dice.
     Fudge,
+    /// 'Marvel' for Marvel Multiverse dice.
+    Marvel,
     /// Addition operator.
     Plus,
     /// Subtraction operator.
@@ -117,6 +119,7 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(Token::Fudge)
             }
+            'm' | 'M' => self.word("marvel", Token::Marvel),
             '+' => {
                 self.chars.next();
                 Ok(Token::Plus)
@@ -227,6 +230,24 @@ impl<'a> Lexer<'a> {
 
         Ok(Token::Number(value))
     }
+
+    fn word(&mut self, expected: &str, token: Token) -> Result<Token> {
+        let start_pos = self.pos;
+        for expected_ch in expected.chars() {
+            match self.chars.peek().copied() {
+                Some((_, ch)) if ch.eq_ignore_ascii_case(&expected_ch) => {
+                    self.chars.next();
+                }
+                Some((pos, ch)) => return Err(Error::UnexpectedChar(ch, pos)),
+                None => {
+                    let first = expected.chars().next().unwrap_or_default();
+                    return Err(Error::UnexpectedChar(first, start_pos));
+                }
+            }
+        }
+
+        Ok(token)
+    }
 }
 
 #[cfg(test)]
@@ -316,6 +337,28 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::CritFail);
         assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
         assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_marvel_word_token_is_case_insensitive() {
+        for input in ["3dMarvel", "3dmarvel", "3dMARVEL"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Number(3));
+            assert_eq!(lexer.next_token().unwrap(), Token::D);
+            assert_eq!(lexer.next_token().unwrap(), Token::Marvel);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_single_m_is_not_marvel_token() {
+        let mut lexer = Lexer::new("3dm");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(3));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert!(matches!(
+            lexer.next_token(),
+            Err(Error::UnexpectedChar('m', 2))
+        ));
     }
 
     #[test]

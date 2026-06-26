@@ -175,6 +175,11 @@ mod tests {
     }
 
     #[test]
+    fn marvel_roll_returns_error_for_unsupported_scoring() {
+        assert!(matches!(roll("3dMarvel"), Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
     fn test_simulate_integration() {
         let result = simulate("2d6", 1000).unwrap();
         assert!(result.min >= 2);

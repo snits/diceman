@@ -37,6 +37,9 @@ pub enum Error {
 
     #[error("Invalid digit dice value: {0} (all digits must be the same, e.g., D66, D444, D88)")]
     InvalidDigitDice(u32),
+
+    #[error("Invalid Marvel roll: {0}")]
+    InvalidMarvelRoll(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

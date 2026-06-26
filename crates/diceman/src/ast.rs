@@ -25,7 +25,7 @@ pub enum Expr {
 pub struct DicePool {
     /// Number of dice to roll.
     pub count: u32,
-    /// Kind of die (numeric N-sided, percentile, or fudge).
+    /// Kind of die (numeric N-sided, percentile, fudge, or Marvel d6).
     pub kind: DieKind,
 }
 
@@ -81,6 +81,8 @@ pub enum ScoringMode {
     CountSuccesses(Condition),
     /// Concatenate non-dropped die values as digits (e.g., D66: 3, 5 -> 35).
     DigitConcatenate,
+    /// Score a Marvel Multiverse 3dMarvel roll.
+    MarvelMultiverse,
 }
 
 /// A rule that detects an interesting outcome (descriptive only; no gameplay effect).
@@ -88,6 +90,7 @@ pub enum ScoringMode {
 pub enum AnnotationRule {
     CriticalSuccess(Condition),
     CriticalFailure(Condition),
+    MarvelFantastic,
 }
 
 /// The face value a die landed on.
@@ -146,6 +149,8 @@ pub enum DieKind {
     Percent,
     /// A fudge die (dF = {-1, 0, 1}).
     Fudge,
+    /// The six-sided Marvel Multiverse die used in a 3dMarvel pool.
+    MarvelD6,
 }
 
 impl DieKind {
@@ -155,6 +160,7 @@ impl DieKind {
             DieKind::Number(n) => *n,
             DieKind::Percent => 100,
             DieKind::Fudge => 3, // -1, 0, 1
+            DieKind::MarvelD6 => 6,
         }
     }
 }
@@ -256,5 +262,10 @@ mod tests {
             .annotation_rules
             .iter()
             .any(|r| matches!(r, AnnotationRule::CriticalFailure(_))));
+    }
+
+    #[test]
+    fn marvel_d6_has_six_faces() {
+        assert_eq!(DieKind::MarvelD6.count(), 6);
     }
 }
