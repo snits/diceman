@@ -195,7 +195,7 @@ result = diceman.roll("4d6kh3")
 print(result)  # "4d6kh3[5, 4, 3, 1] = 12"
 
 stats = diceman.simulate("2d6", n=10000)
-print(f"Mean: {stats['mean']:.2f}")
+print(f"Mean: {stats.mean:.2f}")
 ```
 
 ## License
