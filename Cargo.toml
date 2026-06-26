@@ -17,7 +17,7 @@ repository = "https://github.com/snits/diceman"
 diceman = { path = "crates/diceman" }
 fastrand = "2"
 thiserror = "2"
-pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3 = "0.28"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
