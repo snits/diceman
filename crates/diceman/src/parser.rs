@@ -148,12 +148,20 @@ impl<'a> Parser<'a> {
         let (modifiers, scoring) = self.modifiers()?;
 
         // Parse critical markers (cs and cf can appear in any order)
-        let annotation_rules = self.annotation_rules()?;
+        let mut annotation_rules = self.annotation_rules()?;
 
         // Validate: cs/cf cannot combine with success counting
         if matches!(scoring, ScoringMode::CountSuccesses(_)) && !annotation_rules.is_empty() {
             return Err(Error::CritWithSuccessCounting);
         }
+
+        let scoring = if kind == DieKind::MarvelD6 {
+            Self::validate_marvel_roll(count, &modifiers, &scoring, &annotation_rules)?;
+            annotation_rules.push(AnnotationRule::MarvelFantastic);
+            ScoringMode::MarvelMultiverse
+        } else {
+            scoring
+        };
 
         Ok(Expr::Roll(RollPlan {
             pool: DicePool { count, kind },
@@ -218,7 +226,7 @@ impl<'a> Parser<'a> {
         Ok((first, digits.len() as u32))
     }
 
-    /// Parse the die kind (number, %, or F).
+    /// Parse the die kind (number, %, F, or Marvel).
     fn kind(&mut self) -> Result<DieKind> {
         match &self.current {
             Token::Number(n) => {
@@ -234,11 +242,45 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(DieKind::Fudge)
             }
+            Token::Marvel => {
+                self.advance()?;
+                Ok(DieKind::MarvelD6)
+            }
             _ => Err(Error::Expected {
-                expected: "dice sides (number, %, or F)".to_string(),
+                expected: "dice sides (number, %, F, or Marvel)".to_string(),
                 found: format!("{:?}", self.current),
             }),
         }
+    }
+
+    fn validate_marvel_roll(
+        count: u32,
+        modifiers: &[RollModifier],
+        scoring: &ScoringMode,
+        annotation_rules: &[AnnotationRule],
+    ) -> Result<()> {
+        if count != 3 {
+            return Err(Error::InvalidMarvelRoll(format!(
+                "expected 3 dice, found {count}"
+            )));
+        }
+        if !modifiers.is_empty() {
+            return Err(Error::InvalidMarvelRoll(
+                "modifiers are not supported on Marvel rolls".to_string(),
+            ));
+        }
+        if matches!(scoring, ScoringMode::CountSuccesses(_)) {
+            return Err(Error::InvalidMarvelRoll(
+                "success counting is not supported on Marvel rolls".to_string(),
+            ));
+        }
+        if !annotation_rules.is_empty() {
+            return Err(Error::InvalidMarvelRoll(
+                "critical annotations are not supported on Marvel rolls".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Parse modifiers (keep, drop, explode, reroll) and success-counting scoring.
@@ -890,6 +932,64 @@ mod tests {
                 annotation_rules: vec![],
             })
         );
+    }
+
+    #[test]
+    fn test_parse_marvel_roll() {
+        let expr = parse("3dMarvel").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 3,
+                    kind: DieKind::MarvelD6,
+                },
+                modifiers: vec![],
+                scoring: ScoringMode::MarvelMultiverse,
+                annotation_rules: vec![AnnotationRule::MarvelFantastic],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_marvel_roll_case_insensitive() {
+        for input in ["3dMarvel", "3dmarvel", "3dMARVEL"] {
+            let expr = parse(input).unwrap();
+            assert!(matches!(
+                expr,
+                Expr::Roll(RollPlan {
+                    pool: DicePool {
+                        count: 3,
+                        kind: DieKind::MarvelD6,
+                    },
+                    modifiers,
+                    scoring: ScoringMode::MarvelMultiverse,
+                    annotation_rules,
+                }) if modifiers.is_empty()
+                    && annotation_rules == vec![AnnotationRule::MarvelFantastic]
+            ));
+        }
+    }
+
+    #[test]
+    fn test_parse_marvel_rejects_invalid_forms() {
+        for input in [
+            "2dMarvel",
+            "4dMarvel",
+            "3dMarvel>=8",
+            "3dMarvelkh2",
+            "3dMarvelk2",
+            "3dMarvelr",
+            "3dMarvelro",
+            "3dMarvel!",
+            "3dMarvel!!",
+            "3dMarvel!p",
+            "3dMarvelcs6",
+            "3dMarve",
+            "3dMarvelous",
+        ] {
+            assert!(parse(input).is_err(), "{input} should be invalid");
+        }
     }
 
     #[test]

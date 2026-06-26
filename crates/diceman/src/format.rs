@@ -21,7 +21,7 @@ pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutc
     let total = outcome.as_numeric();
     match plan.scoring {
         ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
-        ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
+        ScoringMode::Sum | ScoringMode::CountSuccesses(_) | ScoringMode::MarvelMultiverse => {
             format_standard_roll(plan, dice, total)
         }
     }
@@ -35,7 +35,7 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
     let sides = match plan.pool.kind {
         DieKind::Number(n) => n.to_string(),
         // The parser only pairs DigitConcatenate with DieKind::Number.
-        DieKind::Percent | DieKind::Fudge => {
+        DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
             unreachable!("DigitConcatenate requires DieKind::Number")
         }
     };
@@ -54,6 +54,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         DieKind::Number(n) => n.to_string(),
         DieKind::Percent => "%".to_string(),
         DieKind::Fudge => "F".to_string(),
+        DieKind::MarvelD6 => "Marvel".to_string(),
     };
 
     let mut modifiers_str: String = plan
@@ -101,6 +102,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
             Some(cond)
         }
         ScoringMode::Sum => None,
+        ScoringMode::MarvelMultiverse => None,
         // Routed to format_digit_roll before reaching here.
         ScoringMode::DigitConcatenate => unreachable!(),
     };
