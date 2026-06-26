@@ -3,7 +3,7 @@
 
 use crate::ast::{
     Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
-    Fantastic, MarvelCheck, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
+    Fantastic, MarvelCheck, MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -166,6 +166,29 @@ pub(crate) fn marvel_plan(edges: u32, troubles: u32, policy: EdgePolicy) -> Roll
     }
 }
 
+/// Derive the target-applied `(success, fantastic)` verdict from a Marvel
+/// outcome.
+///
+/// `success` is `(total + modifier >= target) && !auto_fail` — auto-fail
+/// forces failure even when the total would meet the target. `fantastic` is
+/// `Some(Success)` when the Marvel die showed M and the check succeeded,
+/// `Some(Failure)` when it showed M and the check failed, and `None` when M
+/// did not show. Shared by `roll_marvel_with_rng` and
+/// `simulate_marvel_with_rng` so the verdict logic has one source of truth.
+pub(crate) fn marvel_verdict(
+    outcome: &MarvelOutcome,
+    target: i64,
+    modifier: i64,
+) -> (bool, Option<Fantastic>) {
+    let success = (outcome.total + modifier >= target) && !outcome.auto_fail;
+    let fantastic = outcome.m_shown.then_some(if success {
+        Fantastic::Success
+    } else {
+        Fantastic::Failure
+    });
+    (success, fantastic)
+}
+
 /// Roll a 3dMarvel check against a target with a custom RNG.
 ///
 /// Builds the canonical Marvel `RollPlan` with the given Edge/Trouble counts
@@ -190,13 +213,7 @@ pub fn roll_marvel_with_rng(
             ));
         }
     };
-    // auto-fail forces success=false even when the total would meet the target.
-    let success = (outcome.total + modifier >= target) && !outcome.auto_fail;
-    let fantastic = outcome.m_shown.then_some(if success {
-        Fantastic::Success
-    } else {
-        Fantastic::Failure
-    });
+    let (success, fantastic) = marvel_verdict(&outcome, target, modifier);
     Ok(MarvelCheck {
         outcome,
         target,
@@ -2479,6 +2496,18 @@ mod tests {
         let check = roll_marvel(0, 0, 10, 0, EdgePolicy::RerollLowest).unwrap();
         assert!(!check.expression.is_empty());
     }
+
+    #[test]
+    fn marvel_check_troubles_only_expression_omits_zero_edge() {
+        // [3,3,4] with t1: trouble rerolls the highest-ranked die (index 2, rank 4).
+        // Reroll 1 (rank 1 < 4, keep worse) -> [3,3,1], total 7. The formatted
+        // expression must carry only the `t1` modifier (no `e0`).
+        let mut rng = TestRng::new(vec![3, 3, 4, 1]);
+        let det_check =
+            roll_marvel_with_rng(0, 1, 7, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert_eq!(det_check.expression, "3dMarvelt1[3, 3, 1] = 7");
+        assert_eq!(det_check.outcome.total, 7);
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
@@ -2615,24 +2644,24 @@ mod serde_tests {
     fn marvel_check_serializes_to_json() {
         let check = MarvelCheck {
             outcome: MarvelOutcome {
-                total: 13,
+                total: 10,
                 auto_fail: false,
-                m_shown: true,
+                m_shown: false,
             },
             target: 12,
             modifier: 1,
-            success: true,
-            fantastic: Some(Fantastic::Success),
-            expression: "3dMarvele1[1, M, 6] = 13".to_string(),
+            success: false,
+            fantastic: None,
+            expression: "3dMarvel[3, 3, 4] = 10".to_string(),
         };
         let json = serde_json::to_value(&check).unwrap();
-        assert_eq!(json["outcome"]["total"], 13);
+        assert_eq!(json["outcome"]["total"], 10);
         assert_eq!(json["outcome"]["auto_fail"], false);
-        assert_eq!(json["outcome"]["m_shown"], true);
+        assert_eq!(json["outcome"]["m_shown"], false);
         assert_eq!(json["target"], 12);
         assert_eq!(json["modifier"], 1);
-        assert_eq!(json["success"], true);
-        assert_eq!(json["fantastic"], "Success");
-        assert_eq!(json["expression"], "3dMarvele1[1, M, 6] = 13");
+        assert_eq!(json["success"], false);
+        assert_eq!(json["fantastic"], serde_json::Value::Null);
+        assert_eq!(json["expression"], "3dMarvel[3, 3, 4] = 10");
     }
 }

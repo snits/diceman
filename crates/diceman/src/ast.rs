@@ -217,7 +217,7 @@ pub struct MarvelCheck {
     pub success: bool,
     /// The Fantastic verdict when the Marvel die showed M, else `None`.
     pub fantastic: Option<Fantastic>,
-    /// The formatted roll expression (e.g., `3dMarvel[2, M, 4] = 12`).
+    /// The formatted roll expression (e.g., `3dMarvel[3, 3, 4] = 10`).
     pub expression: String,
 }
 
