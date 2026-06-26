@@ -38,11 +38,15 @@ pub mod sim;
 
 pub use ast::{
     Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
-    MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
+    Fantastic, MarvelCheck, MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 pub use error::{Error, Result};
-pub use roller::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
-pub use sim::{simulate, simulate_seeded, SimResult};
+pub use roller::{
+    roll_marvel, roll_marvel_with_rng, DieResult, FastRng, Rng, RngCheckpoint, RollResult,
+};
+pub use sim::{
+    simulate, simulate_marvel, simulate_marvel_seeded, simulate_seeded, MarvelSimResult, SimResult,
+};
 
 /// Parse and roll a dice expression in one step.
 ///

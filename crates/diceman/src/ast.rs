@@ -185,6 +185,42 @@ impl RollOutcome {
     }
 }
 
+/// The target-applied Marvel verdict when the Marvel die shows M.
+///
+/// `Success` means the check met its target despite M; `Failure` means it
+/// missed. Only produced when the middle die showed M (otherwise the roll
+/// is not Fantastic and no `Fantastic` value is attached).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Fantastic {
+    /// The check succeeded (met or beat the target after modifier, no auto-fail).
+    Success,
+    /// The check failed (missed the target, or auto-fail overrode an otherwise-passing total).
+    Failure,
+}
+
+/// The target-applied result of a single Marvel Multiverse 3dMarvel roll.
+///
+/// Carries the scored `MarvelOutcome` alongside a target/modifier pair and the
+/// derived `success`/`fantastic` booleans, plus the formatted roll expression
+/// so callers can render the roll without re-running the pipeline.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct MarvelCheck {
+    /// The scored Marvel outcome (total, auto_fail, m_shown).
+    pub outcome: MarvelOutcome,
+    /// The target value the check is compared against.
+    pub target: i64,
+    /// The modifier added to the total before comparison.
+    pub modifier: i64,
+    /// Whether the check succeeded: `(total + modifier >= target) && !auto_fail`.
+    pub success: bool,
+    /// The Fantastic verdict when the Marvel die showed M, else `None`.
+    pub fantastic: Option<Fantastic>,
+    /// The formatted roll expression (e.g., `3dMarvel[2, M, 4] = 12`).
+    pub expression: String,
+}
+
 /// A pool-level annotation describing an interesting outcome (descriptive only).
 ///
 /// `Fantastic` and `AutoFail` are populated by Marvel Multiverse scoring
