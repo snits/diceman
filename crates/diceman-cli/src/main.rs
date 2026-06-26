@@ -40,6 +40,40 @@ enum Commands {
         #[arg(long)]
         lte: bool,
     },
+    /// Roll a Marvel Multiverse 3dMarvel check against a target
+    Marvel {
+        /// Number of Edge dice (reroll lowest, keep better)
+        #[arg(long, default_value_t = 0)]
+        edges: u32,
+
+        /// Number of Trouble dice (reroll highest, keep worse)
+        #[arg(long, default_value_t = 0)]
+        troubles: u32,
+
+        /// Target value for the check
+        #[arg(long, default_value_t = 0)]
+        target: i64,
+
+        /// Modifier added to the total before comparison
+        #[arg(long, default_value_t = 0)]
+        modifier: i64,
+
+        /// Edge policy: reroll_lowest or chase_fantastic
+        #[arg(long, default_value = "reroll_lowest")]
+        policy: String,
+
+        /// Run N trials and report rates instead of a single roll
+        #[arg(long)]
+        sim: Option<usize>,
+
+        /// Seed for the simulation RNG (only meaningful with --sim)
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show dice notation reference
     Notation,
 }
@@ -81,6 +115,62 @@ fn main() {
         Commands::Notation => {
             print_notation_reference();
         }
+        Commands::Marvel {
+            edges,
+            troubles,
+            target,
+            modifier,
+            policy,
+            sim,
+            seed,
+            json,
+        } => {
+            let policy = match parse_policy(&policy) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if let Some(n) = sim {
+                let result = if let Some(seed) = seed {
+                    diceman::simulate_marvel_seeded(
+                        edges, troubles, target, modifier, policy, n, seed,
+                    )
+                } else {
+                    diceman::simulate_marvel(edges, troubles, target, modifier, policy, n)
+                };
+                match result {
+                    Ok(result) => {
+                        if json {
+                            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+                        } else {
+                            print_marvel_sim(edges, troubles, policy, &result);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match diceman::roll_marvel(edges, troubles, target, modifier, policy) {
+                    Ok(check) => {
+                        if json {
+                            println!("{}", serde_json::to_string_pretty(&check).unwrap());
+                        } else {
+                            println!("{}", check.expression);
+                            println!("{}", format_marvel_verdict(&check));
+                            println!("{}", format_marvel_context(&check));
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -97,6 +187,76 @@ fn print_sim_json(result: &diceman::SimResult) {
     });
 
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+fn parse_policy(s: &str) -> Result<diceman::EdgePolicy, String> {
+    match s {
+        "reroll_lowest" => Ok(diceman::EdgePolicy::RerollLowest),
+        "chase_fantastic" => Ok(diceman::EdgePolicy::ChaseFantastic),
+        other => Err(format!(
+            "unknown policy '{}', expected reroll_lowest or chase_fantastic",
+            other
+        )),
+    }
+}
+
+fn format_marvel_verdict(check: &diceman::MarvelCheck) -> String {
+    let base = if check.outcome.auto_fail {
+        "Auto-fail"
+    } else if check.success {
+        "Success"
+    } else {
+        "Failure"
+    };
+    let fantastic = match check.fantastic {
+        Some(diceman::Fantastic::Success) => " (Fantastic success)",
+        Some(diceman::Fantastic::Failure) => " (Fantastic failure)",
+        None => "",
+    };
+    format!("{}{}", base, fantastic)
+}
+
+fn format_marvel_context(check: &diceman::MarvelCheck) -> String {
+    let sign = if check.modifier >= 0 { "+" } else { "" };
+    format!(
+        "Total {} vs target {} (modifier {}{})",
+        check.outcome.total, check.target, sign, check.modifier
+    )
+}
+
+fn format_marvel_rates(result: &diceman::MarvelSimResult) -> String {
+    let lines = [
+        ("success rate:", result.success_rate),
+        ("fantastic success:", result.fantastic_success_rate),
+        ("fantastic failure:", result.fantastic_failure_rate),
+        ("auto-fail:", result.auto_fail_rate),
+        ("M shown:", result.m_shown_rate),
+    ];
+    lines
+        .iter()
+        .map(|(label, rate)| format!("{:<20} {:>6.2}%", label, rate * 100.0))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn print_marvel_sim(
+    edges: u32,
+    troubles: u32,
+    policy: diceman::EdgePolicy,
+    result: &diceman::MarvelSimResult,
+) {
+    let policy_str = match policy {
+        diceman::EdgePolicy::RerollLowest => "reroll_lowest",
+        diceman::EdgePolicy::ChaseFantastic => "chase_fantastic",
+    };
+    println!(
+        "Marvel (n={}, target={}, modifier={}, edges={}, troubles={}, policy={})",
+        result.n, result.target, result.modifier, edges, troubles, policy_str
+    );
+    println!();
+    println!("{}", format_marvel_rates(result));
+    println!();
+    print_sim_histogram("3dMarvel total", &result.total);
 }
 
 fn print_sim_histogram(expression: &str, result: &diceman::SimResult) {
@@ -284,6 +444,26 @@ SUCCESS COUNTING
   6d6>4     Count 5s and 6s
   8d6=6     Count only 6s
 
+MARVEL MULTIVERSE
+  3dMarvel  Roll 3d6; the middle die is the Marvel die. Its 1-face
+            shows as M (counts as 6 for the total) except on a raw
+            1 / M / 1, where M reverts to 1 and the check auto-fails
+            (total 3). Totals range 3-18.
+            Example: 3dMarvel[3, 3, 4] = 10
+
+  M shown   "Fantastic" — success or failure depends on the target.
+
+  eN        Edge: reroll the lowest-ranked die N times, keeping the
+            better result. The Marvel die ranks highest.
+  tN        Trouble: reroll the highest-ranked die N times, keeping
+            the worse result. Edge and Trouble cancel 1:1 (e2t1 == e1).
+
+  The chase-fantastic Edge policy (reroll the Marvel die until M)
+  is API/CLI only; there is no notation token for it.
+
+  Use `diceman marvel --edges N --target T` for target/verdict checks;
+  `roll 3dMarvel` only shows the expression, not a target verdict.
+
 MODIFIER ORDER
   Modifiers apply: reroll -> explode -> keep/drop -> success count
   Example: 4d6r!kh3 rerolls 1s, explodes 6s, then keeps highest 3"#
@@ -366,6 +546,234 @@ mod tests {
         for pct in 0..=100 {
             let bar = braille_bar(pct as f64 / 100.0, 20);
             assert_eq!(bar.chars().count(), 20, "failed at {}%", pct);
+        }
+    }
+
+    #[test]
+    fn parse_policy_known_values() {
+        assert_eq!(
+            parse_policy("reroll_lowest").unwrap(),
+            diceman::EdgePolicy::RerollLowest
+        );
+        assert_eq!(
+            parse_policy("chase_fantastic").unwrap(),
+            diceman::EdgePolicy::ChaseFantastic
+        );
+    }
+
+    #[test]
+    fn parse_policy_rejects_unknown() {
+        assert!(parse_policy("bogus").is_err());
+        assert!(parse_policy("").is_err());
+        assert!(parse_policy("RerollLowest").is_err());
+    }
+
+    fn marvel_check(
+        total: i64,
+        auto_fail: bool,
+        m_shown: bool,
+        target: i64,
+        modifier: i64,
+        success: bool,
+        fantastic: Option<diceman::Fantastic>,
+    ) -> diceman::MarvelCheck {
+        diceman::MarvelCheck {
+            outcome: diceman::MarvelOutcome {
+                total,
+                auto_fail,
+                m_shown,
+            },
+            target,
+            modifier,
+            success,
+            fantastic,
+            expression: String::new(),
+        }
+    }
+
+    #[test]
+    fn marvel_verdict_success_no_fantastic() {
+        let check = marvel_check(12, false, false, 10, 0, true, None);
+        assert_eq!(format_marvel_verdict(&check), "Success");
+    }
+
+    #[test]
+    fn marvel_verdict_success_with_fantastic() {
+        let check = marvel_check(
+            12,
+            false,
+            true,
+            10,
+            0,
+            true,
+            Some(diceman::Fantastic::Success),
+        );
+        assert_eq!(format_marvel_verdict(&check), "Success (Fantastic success)");
+    }
+
+    #[test]
+    fn marvel_verdict_failure_with_fantastic() {
+        let check = marvel_check(
+            8,
+            false,
+            true,
+            10,
+            0,
+            false,
+            Some(diceman::Fantastic::Failure),
+        );
+        assert_eq!(format_marvel_verdict(&check), "Failure (Fantastic failure)");
+    }
+
+    #[test]
+    fn marvel_verdict_auto_fail_without_m() {
+        let check = marvel_check(3, true, false, 10, 0, false, None);
+        assert_eq!(format_marvel_verdict(&check), "Auto-fail");
+    }
+
+    #[test]
+    fn marvel_verdict_auto_fail_with_m_shown() {
+        // Raw [1, M, 1]: auto_fail AND m_shown both true, fantastic is Failure.
+        let check = marvel_check(
+            3,
+            true,
+            true,
+            10,
+            0,
+            false,
+            Some(diceman::Fantastic::Failure),
+        );
+        assert_eq!(
+            format_marvel_verdict(&check),
+            "Auto-fail (Fantastic failure)"
+        );
+    }
+
+    #[test]
+    fn marvel_context_formats_modifier_sign() {
+        let check = marvel_check(12, false, false, 10, 3, true, None);
+        assert_eq!(
+            format_marvel_context(&check),
+            "Total 12 vs target 10 (modifier +3)"
+        );
+    }
+
+    #[test]
+    fn marvel_context_negative_modifier() {
+        let check = marvel_check(12, false, false, 10, -2, true, None);
+        assert_eq!(
+            format_marvel_context(&check),
+            "Total 12 vs target 10 (modifier -2)"
+        );
+    }
+
+    fn marvel_sim_result(
+        success_rate: f64,
+        fantastic_success_rate: f64,
+        fantastic_failure_rate: f64,
+        auto_fail_rate: f64,
+        m_shown_rate: f64,
+    ) -> diceman::MarvelSimResult {
+        let mut distribution = std::collections::HashMap::new();
+        distribution.insert(10, 500);
+        distribution.insert(11, 500);
+        diceman::MarvelSimResult {
+            n: 1000,
+            target: 15,
+            modifier: 0,
+            success_rate,
+            fantastic_success_rate,
+            fantastic_failure_rate,
+            auto_fail_rate,
+            m_shown_rate,
+            total: diceman::SimResult {
+                distribution,
+                min: 3,
+                max: 18,
+                mean: 10.5,
+                std_dev: 2.0,
+                n: 1000,
+            },
+        }
+    }
+
+    #[test]
+    fn marvel_rates_formats_all_lines() {
+        let result = marvel_sim_result(0.6234, 0.1012, 0.05, 0.0046, 0.1667);
+        let out = format_marvel_rates(&result);
+        assert!(out.contains("success rate:"));
+        assert!(out.contains("62.34%"));
+        assert!(out.contains("fantastic success:"));
+        assert!(out.contains("10.12%"));
+        assert!(out.contains("fantastic failure:"));
+        assert!(out.contains("5.00%"));
+        assert!(out.contains("auto-fail:"));
+        assert!(out.contains("0.46%"));
+        assert!(out.contains("M shown:"));
+        assert!(out.contains("16.67%"));
+        assert_eq!(out.lines().count(), 5);
+    }
+
+    #[test]
+    fn marvel_sim_json_shape() {
+        let result = diceman::simulate_marvel_seeded(
+            0,
+            0,
+            15,
+            0,
+            diceman::EdgePolicy::RerollLowest,
+            1000,
+            42,
+        )
+        .expect("seeded sim");
+        let value = serde_json::to_value(&result).expect("serialize");
+        let obj = value.as_object().expect("object");
+        for key in [
+            "n",
+            "target",
+            "modifier",
+            "success_rate",
+            "fantastic_success_rate",
+            "fantastic_failure_rate",
+            "auto_fail_rate",
+            "m_shown_rate",
+            "total",
+        ] {
+            assert!(obj.contains_key(key), "missing top-level key: {}", key);
+        }
+        let total = obj
+            .get("total")
+            .expect("total")
+            .as_object()
+            .expect("total object");
+        for key in ["n", "min", "max", "mean", "std_dev", "distribution"] {
+            assert!(total.contains_key(key), "missing total key: {}", key);
+        }
+    }
+
+    #[test]
+    fn marvel_check_json_shape() {
+        let check =
+            diceman::roll_marvel(0, 0, 10, 0, diceman::EdgePolicy::RerollLowest).expect("roll");
+        let value = serde_json::to_value(&check).expect("serialize");
+        let obj = value.as_object().expect("object");
+        for key in [
+            "outcome",
+            "target",
+            "modifier",
+            "success",
+            "fantastic",
+            "expression",
+        ] {
+            assert!(obj.contains_key(key), "missing key: {}", key);
+        }
+        let outcome = obj
+            .get("outcome")
+            .expect("outcome")
+            .as_object()
+            .expect("outcome object");
+        for key in ["total", "auto_fail", "m_shown"] {
+            assert!(outcome.contains_key(key), "missing outcome key: {}", key);
         }
     }
 }
