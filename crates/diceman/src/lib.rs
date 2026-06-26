@@ -37,8 +37,8 @@ pub mod roller;
 pub mod sim;
 
 pub use ast::{
-    AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op, RollModifier,
-    RollOutcome, RollPlan, ScoringMode,
+    Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr,
+    MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 pub use error::{Error, Result};
 pub use roller::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
@@ -100,6 +100,7 @@ pub fn parse(input: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::RollOutcome;
 
     /// Deterministic RNG for testing with pre-defined values.
     struct TestRng {
@@ -175,8 +176,38 @@ mod tests {
     }
 
     #[test]
-    fn marvel_roll_returns_error_for_unsupported_scoring() {
-        assert!(matches!(roll("3dMarvel"), Err(Error::InvalidMarvelRoll(_))));
+    fn marvel_roll_produces_marvel_outcome_with_annotations() {
+        // 3dMarvel with a middle-die 1 shows M (Fantastic) and never auto-fails
+        // unless all three dice are 1. Rolls: 2, 1, 4 -> middle shows M, total 12.
+        let mut rng = TestRng::new(vec![2, 1, 4]);
+        let result = roll_with_rng("3dMarvel", &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 12);
+                assert!(o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+        assert!(result.annotations.contains(&Annotation::Fantastic));
+        assert!(!result.annotations.contains(&Annotation::AutoFail));
+    }
+
+    #[test]
+    fn marvel_roll_auto_fail_annotation() {
+        // 1 / 1 / 1 -> M reverts to 1, total 3, auto-fail regardless of target.
+        let mut rng = TestRng::new(vec![1, 1, 1]);
+        let result = roll_with_rng("3dMarvel", &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 3);
+                assert!(o.m_shown);
+                assert!(o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+        assert!(result.annotations.contains(&Annotation::Fantastic));
+        assert!(result.annotations.contains(&Annotation::AutoFail));
     }
 
     #[test]
