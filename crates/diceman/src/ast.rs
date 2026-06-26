@@ -123,21 +123,63 @@ impl fmt::Display for DieFace {
 /// The final outcome of scoring a roll.
 ///
 /// `Numeric` covers summed and digit-concatenated results;
-/// `Successes` covers success-counting results.
+/// `Successes` covers success-counting results;
+/// `Marvel` covers a Marvel Multiverse 3dMarvel roll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RollOutcome {
     Numeric(i64),
     Successes(i64),
+    Marvel(MarvelOutcome),
+}
+
+/// The scored outcome of a Marvel Multiverse 3dMarvel roll.
+///
+/// The Marvel die is the middle die (index 1); its 1 face is M.
+/// M counts as 6 for the total except on raw `1 / M / 1`, where M reverts
+/// to 1 and the check auto-fails regardless of target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MarvelOutcome {
+    /// The 3dMarvel total, in 3..=18.
+    pub total: i64,
+    /// True when the raw roll was `1 / M / 1` (auto-fail regardless of target).
+    pub auto_fail: bool,
+    /// True when the middle die showed M (its face was 1).
+    pub m_shown: bool,
 }
 
 impl RollOutcome {
-    /// Return the numeric value of the outcome (the count for `Successes`).
+    /// Return the numeric value of the outcome.
+    ///
+    /// For `Successes` this is the count; for `Marvel` this is the total
+    /// (lenient extraction consistent with arithmetic coercion).
     pub fn as_numeric(self) -> i64 {
         match self {
             RollOutcome::Numeric(n) | RollOutcome::Successes(n) => n,
+            RollOutcome::Marvel(o) => o.total,
         }
     }
+}
+
+/// A pool-level annotation describing an interesting outcome (descriptive only).
+///
+/// `Fantastic` and `AutoFail` are populated by Marvel Multiverse scoring
+/// (middle die showed M, or raw `1 / M / 1`). `CriticalSuccess` and
+/// `CriticalFailure` are reserved variants for pool-level crit surfacing;
+/// per-die crit rules currently surface via `DieResult::is_crit_success`
+/// and `DieResult::is_crit_failure`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Annotation {
+    /// A die matched the critical-success condition.
+    CriticalSuccess,
+    /// A die matched the critical-failure condition.
+    CriticalFailure,
+    /// The Marvel middle die showed M.
+    Fantastic,
+    /// The Marvel roll was raw `1 / M / 1` (auto-fail regardless of target).
+    AutoFail,
 }
 
 /// The type of dice to roll.

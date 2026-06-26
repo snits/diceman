@@ -121,6 +121,7 @@ fn roll(expr: &str) -> PyResult<RollResult> {
             let (kind, value) = match r.outcome {
                 core::RollOutcome::Numeric(n) => ("numeric", n),
                 core::RollOutcome::Successes(n) => ("successes", n),
+                core::RollOutcome::Marvel(o) => ("marvel", o.total),
             };
             RollResult {
                 outcome: RollOutcome {

@@ -2,7 +2,8 @@
 // ABOUTME: Converts roll data (dice values, modifiers, crits) into display expressions.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DieKind, RollModifier, RollOutcome, RollPlan, ScoringMode,
+    AnnotationRule, Compare, Condition, DieKind, MarvelOutcome, RollModifier, RollOutcome,
+    RollPlan, ScoringMode,
 };
 use crate::roller::{DieResult, RollResult};
 use std::fmt;
@@ -18,13 +19,52 @@ impl fmt::Display for RollResult {
 /// Produces output like "4d6kh3[6, 5, 4, (1)] = 15" showing the notation,
 /// individual die values (with dropped/crit markers), and the total.
 pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutcome) -> String {
-    let total = outcome.as_numeric();
-    match plan.scoring {
-        ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
-        ScoringMode::Sum | ScoringMode::CountSuccesses(_) | ScoringMode::MarvelMultiverse => {
-            format_standard_roll(plan, dice, total)
+    match outcome {
+        RollOutcome::Marvel(marvel) => format_marvel_roll(plan, dice, marvel),
+        _ => {
+            let total = outcome.as_numeric();
+            match plan.scoring {
+                ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
+                ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
+                    format_standard_roll(plan, dice, total)
+                }
+                // Routed to format_marvel_roll via the outer match.
+                ScoringMode::MarvelMultiverse => unreachable!(),
+            }
         }
     }
+}
+
+/// Format a Marvel Multiverse 3dMarvel roll.
+///
+/// Renders `3dMarvel[l, M, r] = total` where the middle die shows `M` when its
+/// face is 1 (otherwise the face value), with an auto-fail or M-shown suffix.
+fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome) -> String {
+    let dice_str: String = dice
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            if i == 1 && d.face.as_numeric() == 1 {
+                "M".to_string()
+            } else {
+                d.face.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let suffix = if marvel.auto_fail {
+        " (auto-fail)"
+    } else if marvel.m_shown {
+        " (M shown)"
+    } else {
+        ""
+    };
+
+    format!(
+        "{}dMarvel[{}] = {}{}",
+        plan.pool.count, dice_str, marvel.total, suffix
+    )
 }
 
 /// Format a digit-concatenation roll (e.g., D66: "D66[3, 5] = 35").
@@ -102,9 +142,8 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
             Some(cond)
         }
         ScoringMode::Sum => None,
-        ScoringMode::MarvelMultiverse => None,
-        // Routed to format_digit_roll before reaching here.
-        ScoringMode::DigitConcatenate => unreachable!(),
+        // Routed to format_digit_roll or format_marvel_roll before reaching here.
+        ScoringMode::DigitConcatenate | ScoringMode::MarvelMultiverse => unreachable!(),
     };
 
     // Render crit markers: cs before cf, at most one of each.

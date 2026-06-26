@@ -2,8 +2,8 @@
 // ABOUTME: Evaluates parsed AST nodes to produce roll results.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op, RollModifier,
-    RollOutcome, RollPlan, ScoringMode,
+    Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op,
+    RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -98,6 +98,8 @@ pub struct RollResult {
     pub dice: Vec<DieResult>,
     /// Formatted expression showing the roll.
     pub expression: String,
+    /// Pool-level annotations describing interesting outcomes (descriptive only).
+    pub annotations: Vec<Annotation>,
 }
 
 /// Evaluate a dice expression with the default RNG.
@@ -139,6 +141,7 @@ impl<R: Rng> Evaluator<'_, R> {
                 } else {
                     n.to_string()
                 },
+                annotations: vec![],
             }),
             Expr::Roll(plan) => self.evaluate_roll(plan),
             Expr::BinOp { op, left, right } => {
@@ -169,6 +172,7 @@ impl<R: Rng> Evaluator<'_, R> {
                     outcome: RollOutcome::Numeric(total),
                     dice: vec![],
                     expression,
+                    annotations: vec![],
                 })
             }
             Expr::Group(inner) => {
@@ -181,6 +185,7 @@ impl<R: Rng> Evaluator<'_, R> {
                     } else {
                         format!("({})", result.expression)
                     },
+                    annotations: vec![],
                 })
             }
         }
@@ -192,17 +197,19 @@ impl<R: Rng> Evaluator<'_, R> {
         self.apply_modifiers(&mut dice, &plan.pool.kind, &plan.modifiers)?;
         let outcome = Self::score(&dice, &plan.scoring)?;
 
-        let expression = if self.total_only {
-            String::new()
+        let (expression, annotations) = if self.total_only {
+            (String::new(), vec![])
         } else {
-            Self::apply_annotations(&mut dice, &plan.annotation_rules);
-            format::format_roll(plan, &dice, outcome)
+            let annotations =
+                Self::apply_annotations(&mut dice, &plan.annotation_rules, &plan.scoring);
+            (format::format_roll(plan, &dice, outcome), annotations)
         };
 
         Ok(RollResult {
             outcome,
             dice,
             expression,
+            annotations,
         })
     }
 
@@ -275,17 +282,56 @@ impl<R: Rng> Evaluator<'_, R> {
                     .fold(0i64, |acc, d| acc * 10 + d.face.as_numeric()),
             ),
             ScoringMode::MarvelMultiverse => {
-                return Err(Error::InvalidMarvelRoll(
-                    "Marvel scoring is unsupported".to_string(),
-                ));
+                // Contract: 3 dice, index 1 = Marvel die, all DieFace::Numeric.
+                debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
+                let l = dice[0].face.as_numeric();
+                let m = dice[1].face.as_numeric();
+                let r = dice[2].face.as_numeric();
+                let (m_shown, auto_fail) = Self::marvel_facts(dice);
+                let m_contrib = if m == 1 {
+                    if auto_fail {
+                        1
+                    } else {
+                        6
+                    }
+                } else {
+                    m
+                };
+                let total = l + m_contrib + r;
+                RollOutcome::Marvel(crate::ast::MarvelOutcome {
+                    total,
+                    auto_fail,
+                    m_shown,
+                })
             }
         };
 
         Ok(outcome)
     }
 
-    /// Mark critical success/failure annotations on dice (display-only).
-    fn apply_annotations(dice: &mut [DieResult], rules: &[AnnotationRule]) {
+    /// Derive the Marvel Multiverse facts from the dice.
+    ///
+    /// The Marvel die is the middle die (index 1); its 1 face is M.
+    /// `m_shown` is true when the middle die showed M; `auto_fail` is true
+    /// when the raw roll was `1 / M / 1`. The dice are the source of truth.
+    fn marvel_facts(dice: &[DieResult]) -> (bool, bool) {
+        debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
+        let l = dice[0].face.as_numeric();
+        let m = dice[1].face.as_numeric();
+        let r = dice[2].face.as_numeric();
+        (m == 1, l == 1 && m == 1 && r == 1)
+    }
+
+    /// Mark per-die crit annotations and return pool-level annotations.
+    ///
+    /// For Marvel rolls, pushes `Fantastic` when the middle die showed M
+    /// and `AutoFail` when the roll was raw `1 / M / 1`. The Marvel facts are
+    /// re-derived from the dice (the source of truth), not from the outcome.
+    fn apply_annotations(
+        dice: &mut [DieResult],
+        rules: &[AnnotationRule],
+        scoring: &ScoringMode,
+    ) -> Vec<Annotation> {
         let success_cond = rules.iter().find_map(|r| match r {
             AnnotationRule::CriticalSuccess(c) => Some(c),
             _ => None,
@@ -301,6 +347,21 @@ impl<R: Rng> Evaluator<'_, R> {
             if let Some(c) = failure_cond {
                 die.is_crit_failure = c.compare.check(die.face.as_numeric(), c.value);
             }
+        }
+
+        if let ScoringMode::MarvelMultiverse = scoring {
+            debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
+            let (m_shown, auto_fail) = Self::marvel_facts(dice);
+            let mut annotations = Vec::new();
+            if m_shown {
+                annotations.push(Annotation::Fantastic);
+            }
+            if auto_fail {
+                annotations.push(Annotation::AutoFail);
+            }
+            annotations
+        } else {
+            Vec::new()
         }
     }
 
@@ -1369,12 +1430,223 @@ mod tests {
         let result = evaluate_with_rng(&expr, &mut rng);
         assert!(matches!(result, Err(Error::ExplodeLimit(_))));
     }
+
+    // --- Marvel Multiverse scoring tests ---
+
+    /// Build a 3dMarvel `Expr` for testing.
+    fn marvel_expr() -> Expr {
+        Expr::Roll(RollPlan {
+            pool: DicePool {
+                count: 3,
+                kind: DieKind::MarvelD6,
+            },
+            modifiers: vec![],
+            scoring: ScoringMode::MarvelMultiverse,
+            annotation_rules: vec![AnnotationRule::MarvelFantastic],
+        })
+    }
+
+    /// Score a 3-die face triple directly via the `score` function.
+    fn score_marvel(l: i64, m: i64, r: i64) -> RollOutcome {
+        let dice = vec![
+            DieResult {
+                face: DieFace::Numeric(l),
+                history: vec![DieFace::Numeric(l)],
+                dropped: false,
+                is_crit_success: false,
+                is_crit_failure: false,
+            },
+            DieResult {
+                face: DieFace::Numeric(m),
+                history: vec![DieFace::Numeric(m)],
+                dropped: false,
+                is_crit_success: false,
+                is_crit_failure: false,
+            },
+            DieResult {
+                face: DieFace::Numeric(r),
+                history: vec![DieFace::Numeric(r)],
+                dropped: false,
+                is_crit_success: false,
+                is_crit_failure: false,
+            },
+        ];
+        Evaluator::<TestRng>::score(&dice, &ScoringMode::MarvelMultiverse).unwrap()
+    }
+
+    #[test]
+    fn marvel_score_total_distribution_matches_oracle() {
+        // Enumerate all 216 ordered triples and build a histogram of totals.
+        let mut counts: [usize; 19] = [0; 19]; // index by total 0..=18
+        let mut m_shown_count = 0usize;
+        let mut auto_fail_count = 0usize;
+        let mut sum_total: i64 = 0;
+
+        for l in 1..=6 {
+            for m in 1..=6 {
+                for r in 1..=6 {
+                    let outcome = match score_marvel(l, m, r) {
+                        RollOutcome::Marvel(o) => o,
+                        other => panic!("expected Marvel outcome, got {other:?}"),
+                    };
+                    counts[outcome.total as usize] += 1;
+                    sum_total += outcome.total;
+                    if outcome.m_shown {
+                        m_shown_count += 1;
+                    }
+                    if outcome.auto_fail {
+                        auto_fail_count += 1;
+                    }
+                }
+            }
+        }
+
+        let expected = [
+            0, 0, 0, 1, 1, 3, 6, 10, 15, 22, 26, 28, 28, 26, 20, 14, 9, 5, 2,
+        ];
+        for total in 3..=18 {
+            assert_eq!(
+                counts[total], expected[total],
+                "total {total}: got {}, expected {}",
+                counts[total], expected[total]
+            );
+        }
+        assert_eq!(sum_total, 2443, "E[total] * 216 = 2443");
+        assert_eq!(m_shown_count, 36, "P(M) = 36/216 = 1/6");
+        assert_eq!(auto_fail_count, 1, "P(auto_fail) = 1/216");
+    }
+
+    #[test]
+    fn marvel_score_deterministic_sequences() {
+        // [1,1,1] -> M reverts to 1, total 3, auto_fail, m_shown.
+        let o = match score_marvel(1, 1, 1) {
+            RollOutcome::Marvel(o) => o,
+            other => panic!("expected Marvel, got {other:?}"),
+        };
+        assert_eq!(o.total, 3);
+        assert!(o.auto_fail);
+        assert!(o.m_shown);
+
+        // [1,1,6] -> M counts as 6, total 1+6+6=13, m_shown, not auto_fail.
+        let o = match score_marvel(1, 1, 6) {
+            RollOutcome::Marvel(o) => o,
+            other => panic!("expected Marvel, got {other:?}"),
+        };
+        assert_eq!(o.total, 13);
+        assert!(o.m_shown);
+        assert!(!o.auto_fail);
+
+        // [6,1,6] -> M counts as 6, total 6+6+6=18, m_shown.
+        let o = match score_marvel(6, 1, 6) {
+            RollOutcome::Marvel(o) => o,
+            other => panic!("expected Marvel, got {other:?}"),
+        };
+        assert_eq!(o.total, 18);
+        assert!(o.m_shown);
+        assert!(!o.auto_fail);
+
+        // [2,3,4] -> middle is not M, total 9, m_shown false.
+        let o = match score_marvel(2, 3, 4) {
+            RollOutcome::Marvel(o) => o,
+            other => panic!("expected Marvel, got {other:?}"),
+        };
+        assert_eq!(o.total, 9);
+        assert!(!o.m_shown);
+        assert!(!o.auto_fail);
+    }
+
+    #[test]
+    fn marvel_as_numeric_returns_total() {
+        let o = RollOutcome::Marvel(crate::ast::MarvelOutcome {
+            total: 7,
+            auto_fail: false,
+            m_shown: true,
+        });
+        assert_eq!(o.as_numeric(), 7);
+    }
+
+    #[test]
+    fn marvel_binop_coerces_to_numeric_via_as_numeric() {
+        // 3dMarvel + 2 with deterministic rolls [2, 3, 4] -> total 9 + 2 = 11.
+        let expr = crate::parse("3dMarvel + 2").unwrap();
+        let mut rng = TestRng::new(vec![2, 3, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(11));
+    }
+
+    #[test]
+    fn marvel_roll_end_to_end_deterministic() {
+        // Rolls [1,1,6]: middle shows M, total 13, Fantastic annotation, no AutoFail.
+        let mut rng = TestRng::new(vec![1, 1, 6]);
+        let result = evaluate_with_rng(&marvel_expr(), &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 13);
+                assert!(o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+        assert!(result.annotations.contains(&Annotation::Fantastic));
+        assert!(!result.annotations.contains(&Annotation::AutoFail));
+        assert!(
+            result.expression.contains("[1, M, 6]"),
+            "expected M marker in middle position, got: {}",
+            result.expression
+        );
+        assert!(result.expression.contains("13"));
+    }
+
+    #[test]
+    fn marvel_roll_auto_fail_end_to_end() {
+        // Rolls [1,1,1]: M reverts to 1, total 3, both Fantastic and AutoFail.
+        let mut rng = TestRng::new(vec![1, 1, 1]);
+        let result = evaluate_with_rng(&marvel_expr(), &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 3);
+                assert!(o.m_shown);
+                assert!(o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+        assert!(result.annotations.contains(&Annotation::Fantastic));
+        assert!(result.annotations.contains(&Annotation::AutoFail));
+        assert!(result.expression.contains("auto-fail"));
+    }
+
+    #[test]
+    fn marvel_roll_no_m_shown() {
+        // Rolls [2, 3, 4]: middle is 3 (not M), total 9, no annotations.
+        let mut rng = TestRng::new(vec![2, 3, 4]);
+        let result = evaluate_with_rng(&marvel_expr(), &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 9);
+                assert!(!o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+        assert!(result.annotations.is_empty());
+        assert!(!result.expression.contains("M shown"));
+        assert!(!result.expression.contains("auto-fail"));
+    }
+
+    #[test]
+    fn marvel_evaluate_total_returns_numeric_total() {
+        // The sim path (evaluate_total) returns the Marvel total as an i64.
+        let expr = marvel_expr();
+        let mut rng = TestRng::new(vec![6, 1, 6]);
+        let total = crate::roller::evaluate_total(&expr, &mut rng).unwrap();
+        assert_eq!(total, 18);
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
-    use crate::ast::{DieFace, RollOutcome};
+    use crate::ast::{Annotation, DieFace, MarvelOutcome, RollOutcome};
 
     #[test]
     fn roll_result_serializes_to_json() {
@@ -1397,6 +1669,7 @@ mod serde_tests {
                 },
             ],
             expression: "2d6".to_string(),
+            annotations: vec![],
         };
 
         let json = serde_json::to_value(&result).unwrap();
@@ -1410,6 +1683,46 @@ mod serde_tests {
         assert_eq!(json["dice"][0]["is_crit_failure"], false);
         assert_eq!(json["dice"][1]["dropped"], true);
         assert_eq!(json["dice"][1]["is_crit_failure"], true);
+        assert_eq!(json["annotations"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn marvel_outcome_round_trips_through_serde() {
+        let outcome = RollOutcome::Marvel(MarvelOutcome {
+            total: 13,
+            auto_fail: false,
+            m_shown: true,
+        });
+        let json = serde_json::to_string(&outcome).unwrap();
+        let restored: RollOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, outcome);
+        assert_eq!(
+            json,
+            r#"{"Marvel":{"total":13,"auto_fail":false,"m_shown":true}}"#
+        );
+    }
+
+    #[test]
+    fn roll_result_serializes_marvel_annotations() {
+        let result = RollResult {
+            outcome: RollOutcome::Marvel(MarvelOutcome {
+                total: 3,
+                auto_fail: true,
+                m_shown: true,
+            }),
+            dice: vec![],
+            expression: "3dMarvel[1, M, 1] = 3 (auto-fail)".to_string(),
+            annotations: vec![Annotation::Fantastic, Annotation::AutoFail],
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["outcome"]["Marvel"]["total"], 3);
+        assert_eq!(json["outcome"]["Marvel"]["auto_fail"], true);
+        assert_eq!(json["outcome"]["Marvel"]["m_shown"], true);
+        let anns = json["annotations"].as_array().unwrap();
+        assert_eq!(anns.len(), 2);
+        assert_eq!(anns[0], "Fantastic");
+        assert_eq!(anns[1], "AutoFail");
     }
 
     #[test]
