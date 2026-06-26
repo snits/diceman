@@ -1,10 +1,10 @@
 // ABOUTME: Monte Carlo simulation for dice expressions.
 // ABOUTME: Runs many trials to compute probability distributions and statistics.
 
-use crate::ast::{EdgePolicy, Fantastic, RollOutcome};
-use crate::error::Result;
+use crate::ast::{EdgePolicy, Expr, RollOutcome};
+use crate::error::{Error, Result};
 use crate::parser;
-use crate::roller::{evaluate_outcome, evaluate_total, marvel_plan, FastRng, Rng};
+use crate::roller::{evaluate_outcome, evaluate_total, marvel_plan, marvel_verdict, FastRng, Rng};
 use std::collections::HashMap;
 
 /// Result of a Monte Carlo simulation.
@@ -119,25 +119,15 @@ pub fn simulate_seeded(expr: &str, n: usize, seed: u64) -> Result<SimResult> {
 
 fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResult> {
     let parsed = parser::parse(expr)?;
-    let mut totals: Vec<i64> = Vec::with_capacity(n);
-    for _ in 0..n {
-        totals.push(evaluate_total(&parsed, rng)?);
-    }
-    Ok(collect_sim_result(totals.into_iter(), n))
-}
 
-/// Aggregate an iterator of per-trial totals into a `SimResult`.
-///
-/// Shared by `simulate_with_rng` and `simulate_marvel_with_rng` so both
-/// produce identical distribution/statistics semantics.
-fn collect_sim_result(totals: impl Iterator<Item = i64>, n: usize) -> SimResult {
     let mut distribution: HashMap<i64, usize> = HashMap::new();
     let mut sum: i64 = 0;
     let mut sum_sq: i64 = 0;
     let mut min = i64::MAX;
     let mut max = i64::MIN;
 
-    for total in totals {
+    for _ in 0..n {
+        let total = evaluate_total(&parsed, rng)?;
         *distribution.entry(total).or_insert(0) += 1;
         sum += total;
         sum_sq += total * total;
@@ -145,6 +135,22 @@ fn collect_sim_result(totals: impl Iterator<Item = i64>, n: usize) -> SimResult 
         max = max.max(total);
     }
 
+    Ok(finalize_sim_result(distribution, sum, sum_sq, min, max, n))
+}
+
+/// Assemble a `SimResult` from streaming accumulators.
+///
+/// Computes `mean` and `std_dev` (population variance: `sum_sq/n - mean²`)
+/// from the running sums. Shared by `simulate_with_rng` and
+/// `simulate_marvel_with_rng` so both use identical statistics math.
+fn finalize_sim_result(
+    distribution: HashMap<i64, usize>,
+    sum: i64,
+    sum_sq: i64,
+    min: i64,
+    max: i64,
+    n: usize,
+) -> SimResult {
     let mean = sum as f64 / n as f64;
     let variance = (sum_sq as f64 / n as f64) - (mean * mean);
     let std_dev = variance.sqrt();
@@ -203,9 +209,13 @@ pub(crate) fn simulate_marvel_with_rng(
     rng: &mut impl Rng,
 ) -> Result<MarvelSimResult> {
     let plan = marvel_plan(edges, troubles, policy);
-    let expr = crate::ast::Expr::Roll(plan);
+    let expr = Expr::Roll(plan);
 
-    let mut totals: Vec<i64> = Vec::with_capacity(n);
+    let mut distribution: HashMap<i64, usize> = HashMap::new();
+    let mut sum: i64 = 0;
+    let mut sum_sq: i64 = 0;
+    let mut min = i64::MAX;
+    let mut max = i64::MIN;
     let mut success_count = 0usize;
     let mut fantastic_success_count = 0usize;
     let mut fantastic_failure_count = 0usize;
@@ -217,36 +227,34 @@ pub(crate) fn simulate_marvel_with_rng(
         let o = match outcome {
             RollOutcome::Marvel(o) => o,
             RollOutcome::Numeric(_) | RollOutcome::Successes(_) => {
-                return Err(crate::error::Error::InvalidMarvelRoll(
+                return Err(Error::InvalidMarvelRoll(
                     "Marvel plan produced a non-Marvel outcome".to_string(),
                 ));
             }
         };
-        let success = (o.total + modifier >= target) && !o.auto_fail;
-        let fantastic = o.m_shown.then_some(if success {
-            Fantastic::Success
-        } else {
-            Fantastic::Failure
-        });
+        let (success, _) = marvel_verdict(&o, target, modifier);
         if success {
             success_count += 1;
         }
-        if fantastic == Some(Fantastic::Success) {
-            fantastic_success_count += 1;
-        }
-        if fantastic == Some(Fantastic::Failure) {
-            fantastic_failure_count += 1;
+        if o.m_shown {
+            m_shown_count += 1;
+            if success {
+                fantastic_success_count += 1;
+            } else {
+                fantastic_failure_count += 1;
+            }
         }
         if o.auto_fail {
             auto_fail_count += 1;
         }
-        if o.m_shown {
-            m_shown_count += 1;
-        }
-        totals.push(o.total);
+        sum += o.total;
+        sum_sq += o.total * o.total;
+        min = min.min(o.total);
+        max = max.max(o.total);
+        *distribution.entry(o.total).or_insert(0) += 1;
     }
 
-    let total = collect_sim_result(totals.into_iter(), n);
+    let total = finalize_sim_result(distribution, sum, sum_sq, min, max, n);
     let n_f = n as f64;
     Ok(MarvelSimResult {
         n,
