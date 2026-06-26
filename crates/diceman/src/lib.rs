@@ -37,7 +37,7 @@ pub mod roller;
 pub mod sim;
 
 pub use ast::{
-    Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr,
+    Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
     MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 pub use error::{Error, Result};

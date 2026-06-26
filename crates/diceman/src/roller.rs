@@ -2,8 +2,8 @@
 // ABOUTME: Evaluates parsed AST nodes to produce roll results.
 
 use crate::ast::{
-    Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, Expr, Op,
-    RollModifier, RollOutcome, RollPlan, ScoringMode,
+    Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
+    Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -229,14 +229,28 @@ impl<R: Rng> Evaluator<'_, R> {
             .collect()
     }
 
-    /// Apply modifiers in order: reroll -> explode -> keep/drop.
+    /// Apply modifiers. Marvel Edge/Trouble are normalized and applied as a
+    /// pre-pass before the standard reroll -> explode -> keep/drop sequence.
     fn apply_modifiers(
         &mut self,
         dice: &mut Vec<DieResult>,
         kind: &DieKind,
         modifiers: &[RollModifier],
     ) -> Result<()> {
-        for modifier in modifiers {
+        let (marvel, rest): (Vec<&RollModifier>, Vec<&RollModifier>) = modifiers
+            .iter()
+            .partition(|m| matches!(m, RollModifier::Edge { .. } | RollModifier::Trouble { .. }));
+
+        if !marvel.is_empty() {
+            if *kind != DieKind::MarvelD6 {
+                return Err(Error::InvalidMarvelRoll(
+                    "Edge/Trouble modifiers require a 3dMarvel pool".to_string(),
+                ));
+            }
+            self.apply_marvel_edge_trouble(dice, &marvel)?;
+        }
+
+        for modifier in rest {
             match modifier {
                 RollModifier::Reroll { once, condition } => {
                     self.apply_reroll(dice, kind, *once, condition.as_ref())?;
@@ -252,9 +266,131 @@ impl<R: Rng> Evaluator<'_, R> {
                 RollModifier::KeepLowest(n) => self.apply_keep_lowest(dice, *n),
                 RollModifier::DropHighest(n) => self.apply_drop_highest(dice, *n),
                 RollModifier::DropLowest(n) => self.apply_drop_lowest(dice, *n),
+                // Edge/Trouble are consumed by the Marvel pre-pass above.
+                RollModifier::Edge { .. } | RollModifier::Trouble { .. } => {
+                    unreachable!("Edge/Trouble are handled by the Marvel pre-pass")
+                }
             }
         }
         Ok(())
+    }
+
+    /// Apply Marvel Edge/Trouble modifiers with 1:1 net cancellation.
+    ///
+    /// Edge and Trouble steps cancel each other one-for-one before any reroll
+    /// occurs. The net majority side is applied: net Edge steps reroll the
+    /// lowest-ranked die (keeping the better result by rank); net Trouble steps
+    /// reroll the highest-ranked die (keeping the worse result by rank).
+    fn apply_marvel_edge_trouble(
+        &mut self,
+        dice: &mut [DieResult],
+        modifiers: &[&RollModifier],
+    ) -> Result<()> {
+        let mut reroll_lowest: u32 = 0;
+        let mut chase_fantastic: u32 = 0;
+        let mut trouble: u32 = 0;
+        for modifier in modifiers {
+            match modifier {
+                RollModifier::Edge { count, policy } => match policy {
+                    EdgePolicy::RerollLowest => reroll_lowest += count,
+                    EdgePolicy::ChaseFantastic => chase_fantastic += count,
+                },
+                RollModifier::Trouble { count } => trouble += count,
+                _ => unreachable!("only Edge/Trouble reach apply_marvel_edge_trouble"),
+            }
+        }
+
+        let cancel = reroll_lowest.min(trouble);
+        reroll_lowest -= cancel;
+        trouble -= cancel;
+        let cancel_cf = chase_fantastic.min(trouble);
+        chase_fantastic -= cancel_cf;
+        trouble -= cancel_cf;
+
+        if reroll_lowest > 0 {
+            self.apply_edge(dice, reroll_lowest, EdgePolicy::RerollLowest)?;
+        }
+        if chase_fantastic > 0 {
+            self.apply_edge(dice, chase_fantastic, EdgePolicy::ChaseFantastic)?;
+        }
+        if trouble > 0 {
+            self.apply_trouble(dice, trouble)?;
+        }
+        Ok(())
+    }
+
+    /// Marvel rank: the Marvel die (index 1) showing 1 (M) ranks 7, above 6.
+    fn marvel_rank(index: usize, face: i64) -> i64 {
+        if index == 1 && face == 1 {
+            7
+        } else {
+            face
+        }
+    }
+
+    /// Apply one or more Edge reroll steps, keeping the better die by rank.
+    fn apply_edge(&mut self, dice: &mut [DieResult], count: u32, policy: EdgePolicy) -> Result<()> {
+        if count > MAX_REROLLS {
+            return Err(Error::RerollLimit(MAX_REROLLS));
+        }
+        for _ in 0..count {
+            let target = match policy {
+                EdgePolicy::RerollLowest => Self::lowest_rank_index(dice),
+                EdgePolicy::ChaseFantastic => {
+                    if dice.len() > 1 && dice[1].face.as_numeric() != 1 {
+                        1
+                    } else {
+                        Self::lowest_rank_index(dice)
+                    }
+                }
+            };
+            let old_face = dice[target].face.as_numeric();
+            let old_rank = Self::marvel_rank(target, old_face);
+            let new_face = self.roll_die(&DieKind::MarvelD6);
+            let new_rank = Self::marvel_rank(target, new_face);
+            if new_rank > old_rank {
+                dice[target].history.push(DieFace::Numeric(new_face));
+                dice[target].face = DieFace::Numeric(new_face);
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply one or more Trouble reroll steps, keeping the worse die by rank.
+    fn apply_trouble(&mut self, dice: &mut [DieResult], count: u32) -> Result<()> {
+        if count > MAX_REROLLS {
+            return Err(Error::RerollLimit(MAX_REROLLS));
+        }
+        for _ in 0..count {
+            let target = Self::highest_rank_index(dice);
+            let old_face = dice[target].face.as_numeric();
+            let old_rank = Self::marvel_rank(target, old_face);
+            let new_face = self.roll_die(&DieKind::MarvelD6);
+            let new_rank = Self::marvel_rank(target, new_face);
+            if new_rank < old_rank {
+                dice[target].history.push(DieFace::Numeric(new_face));
+                dice[target].face = DieFace::Numeric(new_face);
+            }
+        }
+        Ok(())
+    }
+
+    /// Find the index of the lowest-ranked die, ties broken by lowest pool index.
+    fn lowest_rank_index(dice: &[DieResult]) -> usize {
+        dice.iter()
+            .enumerate()
+            .min_by_key(|(i, d)| Self::marvel_rank(*i, d.face.as_numeric()))
+            .map(|(i, _)| i)
+            .expect("Marvel pool must be non-empty")
+    }
+
+    /// Find the index of the highest-ranked die, ties broken by lowest pool index.
+    fn highest_rank_index(dice: &[DieResult]) -> usize {
+        dice.iter()
+            .enumerate()
+            .min_by_key(|(i, d)| std::cmp::Reverse(Self::marvel_rank(*i, d.face.as_numeric())))
+            .map(|(i, _)| i)
+            .expect("Marvel pool must be non-empty")
     }
 
     /// Convert modified dice into a final outcome per the scoring mode.
@@ -1641,12 +1777,354 @@ mod tests {
         let total = crate::roller::evaluate_total(&expr, &mut rng).unwrap();
         assert_eq!(total, 18);
     }
+
+    // --- Marvel Edge/Trouble deterministic rank-vs-value tests ---
+
+    #[test]
+    fn marvel_edge_keeps_m_over_3_by_rank() {
+        // Initial [5,3,4] (ranks 5,3,4 → lowest is index1 rank3).
+        // Edge rerolls index1 → 1. New rank 7 > 3 ⇒ keep M.
+        // Result [5,1,4] → total 5+6+4=15, m_shown=true.
+        let mut rng = TestRng::new(vec![5, 3, 4, 1]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvele1").unwrap(), &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 15);
+                assert!(o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn marvel_edge_keeps_old_when_reroll_worse_by_rank() {
+        // Initial [5,3,4], reroll index1 → 2. New rank 2 < 3 ⇒ keep old (3).
+        // Result [5,3,4] → total 12, m_shown=false.
+        let mut rng = TestRng::new(vec![5, 3, 4, 2]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvele1").unwrap(), &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 12);
+                assert!(!o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn marvel_trouble_keeps_4_over_m_worse_by_rank() {
+        // Initial [2,1,3] (ranks 2,7,3 → highest is index1 M rank7).
+        // Trouble rerolls index1 → 4. New rank 4 < 7 ⇒ keep worse (4).
+        // Result [2,4,3] → total 9, m_shown=false.
+        let mut rng = TestRng::new(vec![2, 1, 3, 4]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvelt1").unwrap(), &mut rng).unwrap();
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 9);
+                assert!(!o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+    }
+
+    // --- Marvel Edge/Trouble exhaustive enumeration oracles ---
+
+    /// Enumerate all `6^len` rng sequences for a Marvel expression and collect
+    /// `(total, m_shown, auto_fail)` per trial.
+    fn enumerate_marvel(expr_str: &str, len: usize) -> Vec<(i64, bool, bool)> {
+        let expr = crate::parse(expr_str).unwrap();
+        let mut results = Vec::new();
+        let mut sequence = vec![1u32; len];
+        enumerate_marvel_recursive(&expr, &mut sequence, len, 0, &mut results);
+        results
+    }
+
+    fn enumerate_marvel_recursive(
+        expr: &Expr,
+        sequence: &mut Vec<u32>,
+        len: usize,
+        pos: usize,
+        results: &mut Vec<(i64, bool, bool)>,
+    ) {
+        if pos == len {
+            let mut rng = TestRng::new(sequence.clone());
+            let result = evaluate_with_rng(expr, &mut rng).unwrap();
+            match result.outcome {
+                RollOutcome::Marvel(o) => results.push((o.total, o.m_shown, o.auto_fail)),
+                other => panic!("expected Marvel outcome, got {other:?}"),
+            }
+            return;
+        }
+        for v in 1..=6u32 {
+            sequence[pos] = v;
+            enumerate_marvel_recursive(expr, sequence, len, pos + 1, results);
+        }
+    }
+
+    /// Compare two Marvel expressions per rng sequence, asserting identical outcomes.
+    fn assert_marvel_equivalent(a: &str, b: &str, len: usize) {
+        let expr_a = crate::parse(a).unwrap();
+        let expr_b = crate::parse(b).unwrap();
+        let mut sequence = vec![1u32; len];
+        assert_marvel_equivalent_recursive(&expr_a, &expr_b, &mut sequence, len, 0);
+    }
+
+    fn assert_marvel_equivalent_recursive(
+        expr_a: &Expr,
+        expr_b: &Expr,
+        sequence: &mut Vec<u32>,
+        len: usize,
+        pos: usize,
+    ) {
+        if pos == len {
+            let mut rng_a = TestRng::new(sequence.clone());
+            let result_a = evaluate_with_rng(expr_a, &mut rng_a).unwrap();
+            let mut rng_b = TestRng::new(sequence.clone());
+            let result_b = evaluate_with_rng(expr_b, &mut rng_b).unwrap();
+            match (result_a.outcome, result_b.outcome) {
+                (RollOutcome::Marvel(a), RollOutcome::Marvel(b)) => {
+                    assert_eq!(a.total, b.total, "total mismatch for sequence {sequence:?}");
+                    assert_eq!(a.m_shown, b.m_shown, "m_shown for sequence {sequence:?}");
+                    assert_eq!(
+                        a.auto_fail, b.auto_fail,
+                        "auto_fail for sequence {sequence:?}"
+                    );
+                }
+                _ => panic!("expected Marvel outcomes for sequence {sequence:?}"),
+            }
+            return;
+        }
+        for v in 1..=6u32 {
+            sequence[pos] = v;
+            assert_marvel_equivalent_recursive(expr_a, expr_b, sequence, len, pos + 1);
+        }
+    }
+
+    #[test]
+    fn marvel_edge_n1_enumeration_oracle() {
+        let outcomes = enumerate_marvel("3dMarvele1", 4);
+        assert_eq!(outcomes.len(), 1296);
+        let sum_total: i64 = outcomes.iter().map(|(t, _, _)| t).sum();
+        let m_shown_count = outcomes.iter().filter(|(_, m, _)| *m).count();
+        assert_eq!(sum_total, 16849, "E[total] * 1296 = 16849");
+        assert_eq!(m_shown_count, 256, "P(M) = 256/1296 = 16/81");
+    }
+
+    #[test]
+    fn marvel_base_enumeration_oracle() {
+        let outcomes = enumerate_marvel("3dMarvel", 3);
+        assert_eq!(outcomes.len(), 216);
+        let sum_total: i64 = outcomes.iter().map(|(t, _, _)| t).sum();
+        let m_shown_count = outcomes.iter().filter(|(_, m, _)| *m).count();
+        let auto_fail_count = outcomes.iter().filter(|(_, _, a)| *a).count();
+        assert_eq!(sum_total, 2443, "E[total] * 216 = 2443");
+        assert_eq!(m_shown_count, 36, "P(M) = 36/216 = 1/6");
+        assert_eq!(auto_fail_count, 1, "P(auto_fail) = 1/216");
+    }
+
+    #[test]
+    fn marvel_cancellation_e2t1_matches_e1_per_sequence() {
+        assert_marvel_equivalent("3dMarvele2t1", "3dMarvele1", 4);
+    }
+
+    #[test]
+    fn marvel_cancellation_t1e2_matches_e1_per_sequence() {
+        assert_marvel_equivalent("3dMarvelt1e2", "3dMarvele1", 4);
+    }
+
+    #[test]
+    fn marvel_cancellation_e1t1_matches_base_per_sequence() {
+        assert_marvel_equivalent("3dMarvele1t1", "3dMarvel", 3);
+    }
+
+    #[test]
+    fn marvel_cancellation_t2e1_matches_t1_per_sequence() {
+        assert_marvel_equivalent("3dMarvelt2e1", "3dMarvelt1", 4);
+    }
+
+    #[test]
+    fn marvel_edge_n2_enumeration_regression() {
+        let outcomes = enumerate_marvel("3dMarvele2", 5);
+        assert_eq!(outcomes.len(), 7776);
+        let sum_total: i64 = outcomes.iter().map(|(t, _, _)| t).sum();
+        let m_shown_count = outcomes.iter().filter(|(_, m, _)| *m).count();
+        assert_eq!(sum_total, 109863, "E[total] * 7776 for e2");
+        assert_eq!(m_shown_count, 1816, "P(M) * 7776 for e2");
+    }
+
+    #[test]
+    fn marvel_edge_n3_enumeration_regression() {
+        let outcomes = enumerate_marvel("3dMarvele3", 6);
+        assert_eq!(outcomes.len(), 46656);
+        let sum_total: i64 = outcomes.iter().map(|(t, _, _)| t).sum();
+        let m_shown_count = outcomes.iter().filter(|(_, m, _)| *m).count();
+        assert_eq!(sum_total, 696193, "E[total] * 46656 for e3");
+        assert_eq!(m_shown_count, 12476, "P(M) * 46656 for e3");
+    }
+
+    #[test]
+    fn marvel_trouble_n1_enumeration_regression() {
+        let outcomes = enumerate_marvel("3dMarvelt1", 4);
+        assert_eq!(outcomes.len(), 1296);
+        let sum_total: i64 = outcomes.iter().map(|(t, _, _)| t).sum();
+        let m_shown_count = outcomes.iter().filter(|(_, m, _)| *m).count();
+        assert_eq!(sum_total, 12657, "E[total] * 1296 for t1");
+        assert_eq!(m_shown_count, 36, "P(M) * 1296 for t1");
+        // Trouble lowers the total on average compared to the base roll.
+        assert!(
+            sum_total < 2443 * 6,
+            "trouble E[total] must be below base E[total]"
+        );
+    }
+
+    #[test]
+    fn marvel_edge_n1_not_equivalent_to_top_3_of_4d6() {
+        // 4d6kh3 rolls 4d6 and keeps the highest 3 by value. Enumerate 6^4
+        // sequences and sum the totals. This must differ from 3dMarvele1's
+        // sum (16849) — Marvel Edge is position-aware (M ranks 7), not ordinary
+        // top-3-of-4 by value.
+        let expr = crate::parse("4d6kh3").unwrap();
+        let mut sum_total: i64 = 0;
+        let mut sequence = vec![1u32; 4];
+        sum_numeric_recursive(&expr, &mut sequence, 4, 0, &mut sum_total);
+        assert_ne!(
+            sum_total, 16849,
+            "3dMarvele1 must not be equivalent to 4d6kh3"
+        );
+    }
+
+    fn sum_numeric_recursive(
+        expr: &Expr,
+        sequence: &mut Vec<u32>,
+        len: usize,
+        pos: usize,
+        sum: &mut i64,
+    ) {
+        if pos == len {
+            let mut rng = TestRng::new(sequence.clone());
+            let result = evaluate_with_rng(expr, &mut rng).unwrap();
+            *sum += result.outcome.as_numeric();
+            return;
+        }
+        for v in 1..=6u32 {
+            sequence[pos] = v;
+            sum_numeric_recursive(expr, sequence, len, pos + 1, sum);
+        }
+    }
+
+    #[test]
+    fn marvel_edge_format_renders_modifiers() {
+        // Pool [3,3,4] (ranks 3,3,4); e2 = 2 Edge steps.
+        // Step1: lowest=index0 (tie rank3, lowest index), reroll 2 (rank2 < 3 → keep old 3).
+        // Step2: lowest=index0 (still rank3), reroll 3 (rank3 not > 3 → keep old 3).
+        // Dice stay [3,3,4]; m=3 not M → m_contrib=3; total=10; no suffix.
+        let mut rng = TestRng::new(vec![3, 3, 4, 2, 3]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvele2").unwrap(), &mut rng).unwrap();
+        assert_eq!(
+            result.expression, "3dMarvele2[3, 3, 4] = 10",
+            "got: {}",
+            result.expression
+        );
+    }
+
+    // --- ChaseFantastic behavioral tests ---
+
+    /// Build a 3-die Marvel `Vec<DieResult>` with the given faces.
+    fn marvel_dice(faces: [i64; 3]) -> Vec<DieResult> {
+        faces
+            .iter()
+            .map(|&f| DieResult {
+                face: DieFace::Numeric(f),
+                history: vec![DieFace::Numeric(f)],
+                dropped: false,
+                is_crit_success: false,
+                is_crit_failure: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn chase_fantastic_targets_marvel_die_when_not_m() {
+        // dice=[2,5,4]; index1=5 (not M, rank 5). ChaseFantastic targets index 1.
+        // RerollLowest would target index0 (rank2) — so this distinguishes the policy.
+        // Reroll 1 → rank 7 > 5 ⇒ keep. dice[1].face becomes 1 (M); index0 unchanged.
+        let mut rng = TestRng::new(vec![1]);
+        let mut dice = marvel_dice([2, 5, 4]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        evaluator
+            .apply_edge(&mut dice, 1, EdgePolicy::ChaseFantastic)
+            .unwrap();
+        assert_eq!(dice[0].face.as_numeric(), 2);
+        assert_eq!(dice[1].face.as_numeric(), 1);
+        assert_eq!(dice[2].face.as_numeric(), 4);
+    }
+
+    #[test]
+    fn chase_fantastic_falls_back_to_lowest_when_m_shown() {
+        // dice=[5,1,4]; index1=1 (M, rank 7). ChaseFantastic falls back to
+        // lowest_rank_index → index2 (rank 4). Reroll 6 → rank 6 > 4 ⇒ keep.
+        // dice[1] (M) unchanged; dice[2] becomes 6.
+        let mut rng = TestRng::new(vec![6]);
+        let mut dice = marvel_dice([5, 1, 4]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        evaluator
+            .apply_edge(&mut dice, 1, EdgePolicy::ChaseFantastic)
+            .unwrap();
+        assert_eq!(dice[0].face.as_numeric(), 5);
+        assert_eq!(dice[1].face.as_numeric(), 1);
+        assert_eq!(dice[2].face.as_numeric(), 6);
+    }
+
+    #[test]
+    fn chase_fantastic_re_evaluates_target_per_step() {
+        // dice=[2,5,4], 2 steps, rerolls [1, 6].
+        // Step1: index1=5 not M → target index1 → reroll 1 (rank7>5 keep) → [2,1,4].
+        // Step2: index1=1 (M) → fall back to lowest_rank_index.
+        //   ranks (0,2),(1,7),(2,4) → index0 rank2. reroll 6 (rank6>2 keep) → [6,1,4].
+        let mut rng = TestRng::new(vec![1, 6]);
+        let mut dice = marvel_dice([2, 5, 4]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        evaluator
+            .apply_edge(&mut dice, 2, EdgePolicy::ChaseFantastic)
+            .unwrap();
+        assert_eq!(dice[0].face.as_numeric(), 6);
+        assert_eq!(dice[1].face.as_numeric(), 1);
+        assert_eq!(dice[2].face.as_numeric(), 4);
+    }
+
+    // --- MAX_REROLLS guard tests ---
+
+    #[test]
+    fn marvel_edge_count_over_limit_errors() {
+        let mut rng = TestRng::new(vec![1, 1, 1]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvele200").unwrap(), &mut rng);
+        assert!(matches!(result, Err(Error::RerollLimit(_))));
+    }
+
+    #[test]
+    fn marvel_trouble_count_over_limit_errors() {
+        let mut rng = TestRng::new(vec![1, 1, 1]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvelt200").unwrap(), &mut rng);
+        assert!(matches!(result, Err(Error::RerollLimit(_))));
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
-    use crate::ast::{Annotation, DieFace, MarvelOutcome, RollOutcome};
+    use crate::ast::{Annotation, DieFace, EdgePolicy, MarvelOutcome, RollOutcome};
 
     #[test]
     fn roll_result_serializes_to_json() {
@@ -1739,5 +2217,20 @@ mod serde_tests {
         rng.restore(restored_checkpoint);
 
         assert_eq!(rng.roll(10), expected);
+    }
+
+    #[test]
+    fn edge_policy_round_trips_through_serde() {
+        let reroll_lowest = EdgePolicy::RerollLowest;
+        let json = serde_json::to_string(&reroll_lowest).unwrap();
+        let restored: EdgePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, reroll_lowest);
+        assert_eq!(json, r#""RerollLowest""#);
+
+        let chase = EdgePolicy::ChaseFantastic;
+        let json = serde_json::to_string(&chase).unwrap();
+        let restored: EdgePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, chase);
+        assert_eq!(json, r#""ChaseFantastic""#);
     }
 }

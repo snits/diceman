@@ -2,8 +2,8 @@
 // ABOUTME: Converts roll data (dice values, modifiers, crits) into display expressions.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DieKind, MarvelOutcome, RollModifier, RollOutcome,
-    RollPlan, ScoringMode,
+    AnnotationRule, Compare, Condition, DieKind, EdgePolicy, MarvelOutcome, RollModifier,
+    RollOutcome, RollPlan, ScoringMode,
 };
 use crate::roller::{DieResult, RollResult};
 use std::fmt;
@@ -61,44 +61,16 @@ fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome
         ""
     };
 
+    let modifiers = modifiers_str(plan);
     format!(
-        "{}dMarvel[{}] = {}{}",
-        plan.pool.count, dice_str, marvel.total, suffix
+        "{}dMarvel{}[{}] = {}{}",
+        plan.pool.count, modifiers, dice_str, marvel.total, suffix
     )
 }
 
-/// Format a digit-concatenation roll (e.g., D66: "D66[3, 5] = 35").
-///
-/// Digit dice carry no modifiers or annotations from the parser, so dropped
-/// dice and crit markers do not arise here; values render plain.
-fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let sides = match plan.pool.kind {
-        DieKind::Number(n) => n.to_string(),
-        // The parser only pairs DigitConcatenate with DieKind::Number.
-        DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
-            unreachable!("DigitConcatenate requires DieKind::Number")
-        }
-    };
-    let prefix = std::iter::repeat_n(sides.as_str(), plan.pool.count as usize).collect::<String>();
-    let dice_str = dice
-        .iter()
-        .map(|d| d.face.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("D{}[{}] = {}", prefix, dice_str, total)
-}
-
-/// Format a standard (sum or success-counting) roll.
-fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let kind_str = match plan.pool.kind {
-        DieKind::Number(n) => n.to_string(),
-        DieKind::Percent => "%".to_string(),
-        DieKind::Fudge => "F".to_string(),
-        DieKind::MarvelD6 => "Marvel".to_string(),
-    };
-
-    let mut modifiers_str: String = plan
-        .modifiers
+/// Render the modifier portion of a roll notation (e.g., "kh3!p>4r<3").
+fn modifiers_str(plan: &RollPlan) -> String {
+    plan.modifiers
         .iter()
         .map(|m| match m {
             RollModifier::KeepHighest(n) => format!("kh{}", n),
@@ -132,13 +104,51 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
                 }
                 s
             }
+            RollModifier::Edge { count, policy } => match policy {
+                EdgePolicy::RerollLowest => format!("e{}", count),
+                EdgePolicy::ChaseFantastic => format!("e{}c", count),
+            },
+            RollModifier::Trouble { count } => format!("t{}", count),
         })
-        .collect();
+        .collect()
+}
+
+/// Format a digit-concatenation roll (e.g., D66: "D66[3, 5] = 35").
+///
+/// Digit dice carry no modifiers or annotations from the parser, so dropped
+/// dice and crit markers do not arise here; values render plain.
+fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
+    let sides = match plan.pool.kind {
+        DieKind::Number(n) => n.to_string(),
+        // The parser only pairs DigitConcatenate with DieKind::Number.
+        DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
+            unreachable!("DigitConcatenate requires DieKind::Number")
+        }
+    };
+    let prefix = std::iter::repeat_n(sides.as_str(), plan.pool.count as usize).collect::<String>();
+    let dice_str = dice
+        .iter()
+        .map(|d| d.face.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("D{}[{}] = {}", prefix, dice_str, total)
+}
+
+/// Format a standard (sum or success-counting) roll.
+fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
+    let kind_str = match plan.pool.kind {
+        DieKind::Number(n) => n.to_string(),
+        DieKind::Percent => "%".to_string(),
+        DieKind::Fudge => "F".to_string(),
+        DieKind::MarvelD6 => "Marvel".to_string(),
+    };
+
+    let mut modifiers: String = modifiers_str(plan);
 
     // Success-counting scoring renders its condition after the modifiers.
     let success_condition: Option<&Condition> = match &plan.scoring {
         ScoringMode::CountSuccesses(cond) => {
-            modifiers_str.push_str(&format!("{}{}", cond.compare, cond.value));
+            modifiers.push_str(&format!("{}{}", cond.compare, cond.value));
             Some(cond)
         }
         ScoringMode::Sum => None,
@@ -183,12 +193,12 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         let success_word = if total == 1 { "success" } else { "successes" };
         format!(
             "{}d{}{}{}[{}] = {} {}",
-            plan.pool.count, kind_str, modifiers_str, crit_str, dice_str, total, success_word
+            plan.pool.count, kind_str, modifiers, crit_str, dice_str, total, success_word
         )
     } else {
         format!(
             "{}d{}{}{}[{}] = {}",
-            plan.pool.count, kind_str, modifiers_str, crit_str, dice_str, total
+            plan.pool.count, kind_str, modifiers, crit_str, dice_str, total
         )
     }
 }

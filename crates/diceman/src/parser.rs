@@ -2,8 +2,8 @@
 // ABOUTME: Converts token streams into an AST.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DicePool, DieKind, Expr, Op, RollModifier, RollPlan,
-    ScoringMode,
+    AnnotationRule, Compare, Condition, DicePool, DieKind, EdgePolicy, Expr, Op, RollModifier,
+    RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::lexer::{Lexer, Token};
@@ -160,6 +160,14 @@ impl<'a> Parser<'a> {
             annotation_rules.push(AnnotationRule::MarvelFantastic);
             ScoringMode::MarvelMultiverse
         } else {
+            if modifiers
+                .iter()
+                .any(|m| matches!(m, RollModifier::Edge { .. } | RollModifier::Trouble { .. }))
+            {
+                return Err(Error::InvalidMarvelRoll(
+                    "Edge/Trouble modifiers require a 3dMarvel pool".to_string(),
+                ));
+            }
             scoring
         };
 
@@ -264,10 +272,15 @@ impl<'a> Parser<'a> {
                 "expected 3 dice, found {count}"
             )));
         }
-        if !modifiers.is_empty() {
-            return Err(Error::InvalidMarvelRoll(
-                "modifiers are not supported on Marvel rolls".to_string(),
-            ));
+        for modifier in modifiers {
+            if !matches!(
+                modifier,
+                RollModifier::Edge { .. } | RollModifier::Trouble { .. }
+            ) {
+                return Err(Error::InvalidMarvelRoll(format!(
+                    "{modifier:?} is not supported on Marvel rolls; only Edge and Trouble"
+                )));
+            }
         }
         if matches!(scoring, ScoringMode::CountSuccesses(_)) {
             return Err(Error::InvalidMarvelRoll(
@@ -301,6 +314,14 @@ impl<'a> Parser<'a> {
                 Token::R => {
                     self.advance()?;
                     modifiers.push(self.reroll_modifier()?);
+                }
+                Token::Edge => {
+                    self.advance()?;
+                    modifiers.push(self.edge_modifier()?);
+                }
+                Token::Trouble => {
+                    self.advance()?;
+                    modifiers.push(self.trouble_modifier()?);
                 }
                 Token::D => {
                     // In modifier context, 'd' followed by 'h' or 'l' is a drop modifier
@@ -412,6 +433,21 @@ impl<'a> Parser<'a> {
         let condition = self.optional_condition()?;
 
         Ok(RollModifier::Reroll { once, condition })
+    }
+
+    /// Parse a Marvel Edge modifier (e, e2). Notation always produces RerollLowest.
+    fn edge_modifier(&mut self) -> Result<RollModifier> {
+        let count = self.optional_number(1)?;
+        Ok(RollModifier::Edge {
+            count,
+            policy: EdgePolicy::RerollLowest,
+        })
+    }
+
+    /// Parse a Marvel Trouble modifier (t, t2).
+    fn trouble_modifier(&mut self) -> Result<RollModifier> {
+        let count = self.optional_number(1)?;
+        Ok(RollModifier::Trouble { count })
     }
 
     /// Parse an optional number, returning default if not present.
@@ -989,6 +1025,101 @@ mod tests {
             "3dMarvelous",
         ] {
             assert!(parse(input).is_err(), "{input} should be invalid");
+        }
+    }
+
+    #[test]
+    fn test_parse_marvel_edge() {
+        let expr = parse("3dMarvele2").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 3,
+                    kind: DieKind::MarvelD6,
+                },
+                modifiers: vec![RollModifier::Edge {
+                    count: 2,
+                    policy: EdgePolicy::RerollLowest,
+                }],
+                scoring: ScoringMode::MarvelMultiverse,
+                annotation_rules: vec![AnnotationRule::MarvelFantastic],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_marvel_edge_default_count() {
+        let expr = parse("3dMarvele").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 3,
+                    kind: DieKind::MarvelD6,
+                },
+                modifiers: vec![RollModifier::Edge {
+                    count: 1,
+                    policy: EdgePolicy::RerollLowest,
+                }],
+                scoring: ScoringMode::MarvelMultiverse,
+                annotation_rules: vec![AnnotationRule::MarvelFantastic],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_marvel_trouble() {
+        let expr = parse("3dMarvelt1").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan {
+                pool: DicePool {
+                    count: 3,
+                    kind: DieKind::MarvelD6,
+                },
+                modifiers: vec![RollModifier::Trouble { count: 1 }],
+                scoring: ScoringMode::MarvelMultiverse,
+                annotation_rules: vec![AnnotationRule::MarvelFantastic],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_marvel_edge_trouble_combinations() {
+        for input in [
+            "3dMarvele1t1",
+            "3dMarvelt1e1",
+            "3dMarvele2t1",
+            "3dMarvelt1e2",
+        ] {
+            let expr = parse(input).unwrap();
+            assert!(
+                matches!(
+                    expr,
+                    Expr::Roll(RollPlan {
+                        pool: DicePool {
+                            count: 3,
+                            kind: DieKind::MarvelD6,
+                        },
+                        scoring: ScoringMode::MarvelMultiverse,
+                        annotation_rules,
+                        ..
+                    }) if annotation_rules == vec![AnnotationRule::MarvelFantastic]
+                ),
+                "{input} should parse as a Marvel roll with Edge/Trouble modifiers"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_edge_trouble_rejected_on_non_marvel() {
+        for input in ["2d6e1", "4d6t1", "1d20e1"] {
+            let err = parse(input).unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidMarvelRoll(_)),
+                "{input} should be rejected with InvalidMarvelRoll, got {err:?}"
+            );
         }
     }
 
