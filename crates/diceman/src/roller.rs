@@ -3,7 +3,7 @@
 
 use crate::ast::{
     Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
-    Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
+    Fantastic, MarvelCheck, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -123,6 +123,106 @@ pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
         total_only: true,
     };
     Ok(evaluator.evaluate(expr)?.outcome.as_numeric())
+}
+
+/// Evaluate a dice expression and return the full `RollOutcome` without
+/// formatting an expression string or computing annotations.
+///
+/// Mirrors `evaluate_total` but preserves the typed outcome (e.g., the
+/// Marvel `auto_fail`/`m_shown` flags) instead of collapsing via `as_numeric`.
+pub(crate) fn evaluate_outcome(expr: &Expr, rng: &mut impl Rng) -> Result<RollOutcome> {
+    let mut evaluator = Evaluator {
+        rng,
+        total_only: true,
+    };
+    Ok(evaluator.evaluate(expr)?.outcome)
+}
+
+/// Build the canonical 3dMarvel `RollPlan` for the typed Marvel API.
+///
+/// 0-count Edge/Trouble modifiers are omitted so the formatted expression
+/// matches the canonical notation (e.g., `3dMarvel` for the base roll rather
+/// than `3dMarvele0t0`). The roller's `apply_marvel_edge_trouble` cleanly
+/// no-ops when no Edge/Trouble modifiers are present.
+pub(crate) fn marvel_plan(edges: u32, troubles: u32, policy: EdgePolicy) -> RollPlan {
+    let mut modifiers = Vec::new();
+    if edges > 0 {
+        modifiers.push(RollModifier::Edge {
+            count: edges,
+            policy,
+        });
+    }
+    if troubles > 0 {
+        modifiers.push(RollModifier::Trouble { count: troubles });
+    }
+    RollPlan {
+        pool: DicePool {
+            count: 3,
+            kind: DieKind::MarvelD6,
+        },
+        modifiers,
+        scoring: ScoringMode::MarvelMultiverse,
+        annotation_rules: vec![AnnotationRule::MarvelFantastic],
+    }
+}
+
+/// Roll a 3dMarvel check against a target with a custom RNG.
+///
+/// Builds the canonical Marvel `RollPlan` with the given Edge/Trouble counts
+/// and Edge policy, runs the full pipeline (including expression formatting),
+/// and applies the target/modifier to derive `success` and `fantastic`.
+pub fn roll_marvel_with_rng(
+    edges: u32,
+    troubles: u32,
+    target: i64,
+    modifier: i64,
+    policy: EdgePolicy,
+    rng: &mut impl Rng,
+) -> Result<MarvelCheck> {
+    let plan = marvel_plan(edges, troubles, policy);
+    let expr = Expr::Roll(plan);
+    let result = evaluate_with_rng(&expr, rng)?;
+    let outcome = match result.outcome {
+        RollOutcome::Marvel(o) => o,
+        RollOutcome::Numeric(_) | RollOutcome::Successes(_) => {
+            return Err(Error::InvalidMarvelRoll(
+                "Marvel plan produced a non-Marvel outcome".to_string(),
+            ));
+        }
+    };
+    // auto-fail forces success=false even when the total would meet the target.
+    let success = (outcome.total + modifier >= target) && !outcome.auto_fail;
+    let fantastic = outcome.m_shown.then_some(if success {
+        Fantastic::Success
+    } else {
+        Fantastic::Failure
+    });
+    Ok(MarvelCheck {
+        outcome,
+        target,
+        modifier,
+        success,
+        fantastic,
+        expression: result.expression,
+    })
+}
+
+/// Roll a 3dMarvel check against a target with the default RNG.
+pub fn roll_marvel(
+    edges: u32,
+    troubles: u32,
+    target: i64,
+    modifier: i64,
+    policy: EdgePolicy,
+) -> Result<MarvelCheck> {
+    roll_marvel_with_rng(
+        edges,
+        troubles,
+        target,
+        modifier,
+        policy,
+        &mut FastRng::new(),
+    )
 }
 
 struct Evaluator<'a, R: Rng> {
@@ -2119,12 +2219,274 @@ mod tests {
         let result = evaluate_with_rng(&crate::parse("3dMarvelt200").unwrap(), &mut rng);
         assert!(matches!(result, Err(Error::RerollLimit(_))));
     }
+
+    // --- Typed Marvel API tests ---
+
+    use crate::ast::{Fantastic, MarvelCheck};
+
+    /// Enumerate all 6^3 ordered Marvel triples, calling `roll_marvel_with_rng`
+    /// once per triple with a `TestRng` carrying exactly that triple, and
+    /// collect `(total, m_shown, auto_fail, success, fantastic)` per trial.
+    fn enumerate_marvel_check(
+        edges: u32,
+        troubles: u32,
+        policy: EdgePolicy,
+        target: i64,
+        modifier: i64,
+    ) -> Vec<MarvelCheck> {
+        let mut results = Vec::new();
+        for l in 1..=6u32 {
+            for m in 1..=6u32 {
+                for r in 1..=6u32 {
+                    let mut rng = TestRng::new(vec![l, m, r]);
+                    let check =
+                        roll_marvel_with_rng(edges, troubles, target, modifier, policy, &mut rng)
+                            .unwrap();
+                    results.push(check);
+                }
+            }
+        }
+        results
+    }
+
+    /// Enumerate all 6^len rng sequences for the typed Marvel API (used for
+    /// edges/troubles enumerations where each trial consumes len RNG draws).
+    fn enumerate_marvel_check_long(
+        edges: u32,
+        troubles: u32,
+        policy: EdgePolicy,
+        target: i64,
+        modifier: i64,
+        len: usize,
+    ) -> Vec<MarvelCheck> {
+        let mut results = Vec::new();
+        let mut sequence = vec![1u32; len];
+        enumerate_marvel_check_long_recursive(
+            edges,
+            troubles,
+            policy,
+            target,
+            modifier,
+            len,
+            0,
+            &mut sequence,
+            &mut results,
+        );
+        results
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enumerate_marvel_check_long_recursive(
+        edges: u32,
+        troubles: u32,
+        policy: EdgePolicy,
+        target: i64,
+        modifier: i64,
+        len: usize,
+        pos: usize,
+        sequence: &mut Vec<u32>,
+        results: &mut Vec<MarvelCheck>,
+    ) {
+        if pos == len {
+            let mut rng = TestRng::new(sequence.clone());
+            let check =
+                roll_marvel_with_rng(edges, troubles, target, modifier, policy, &mut rng).unwrap();
+            results.push(check);
+            return;
+        }
+        for v in 1..=6u32 {
+            sequence[pos] = v;
+            enumerate_marvel_check_long_recursive(
+                edges,
+                troubles,
+                policy,
+                target,
+                modifier,
+                len,
+                pos + 1,
+                sequence,
+                results,
+            );
+        }
+    }
+
+    #[test]
+    fn marvel_check_base_216_enumeration_oracle() {
+        let checks = enumerate_marvel_check(0, 0, EdgePolicy::RerollLowest, 0, 0);
+        assert_eq!(checks.len(), 216);
+
+        let mut histogram = [0usize; 19];
+        let mut sum_total: i64 = 0;
+        let mut m_shown_count = 0usize;
+        let mut auto_fail_count = 0usize;
+        for check in &checks {
+            histogram[check.outcome.total as usize] += 1;
+            sum_total += check.outcome.total;
+            if check.outcome.m_shown {
+                m_shown_count += 1;
+            }
+            if check.outcome.auto_fail {
+                auto_fail_count += 1;
+            }
+        }
+
+        let expected = [
+            0, 0, 0, 1, 1, 3, 6, 10, 15, 22, 26, 28, 28, 26, 20, 14, 9, 5, 2,
+        ];
+        for total in 3..=18 {
+            assert_eq!(
+                histogram[total], expected[total],
+                "total {total}: got {}, expected {}",
+                histogram[total], expected[total]
+            );
+        }
+        assert_eq!(sum_total, 2443, "E[total] * 216 = 2443");
+        assert_eq!(m_shown_count, 36, "P(M) = 36/216 = 1/6");
+        assert_eq!(auto_fail_count, 1, "P(auto_fail) = 1/216");
+    }
+
+    #[test]
+    fn marvel_check_fantastic_conditioning_on_total_14() {
+        // P(M | total=14) cannot be derived from the total histogram alone —
+        // the histogram says how many triples sum to 14, but not how many of
+        // those showed M on the middle die. Per-trial aggregation is the only
+        // way to recover this conditioning, which is why `MarvelCheck`
+        // carries `m_shown` alongside `total`.
+        let checks = enumerate_marvel_check(0, 0, EdgePolicy::RerollLowest, 0, 0);
+        let total_14: Vec<_> = checks.iter().filter(|c| c.outcome.total == 14).collect();
+        let total_14_m_shown: Vec<_> = total_14.iter().filter(|c| c.outcome.m_shown).collect();
+        assert_eq!(total_14.len(), 20, "20 triples sum to total=14");
+        assert_eq!(total_14_m_shown.len(), 5, "5 of those show M");
+        let p_m_given_14 = total_14_m_shown.len() as f64 / total_14.len() as f64;
+        assert!((p_m_given_14 - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn marvel_check_edge_n1_enumeration_oracle() {
+        let checks = enumerate_marvel_check_long(1, 0, EdgePolicy::RerollLowest, 0, 0, 4);
+        assert_eq!(checks.len(), 1296);
+        let sum_total: i64 = checks.iter().map(|c| c.outcome.total).sum();
+        let m_shown_count = checks.iter().filter(|c| c.outcome.m_shown).count();
+        assert_eq!(
+            sum_total, 16849,
+            "E[total] * 1296 = 16849 for e1 RerollLowest"
+        );
+        assert_eq!(m_shown_count, 256, "P(M) = 256/1296 for e1 RerollLowest");
+    }
+
+    #[test]
+    fn marvel_check_trouble_n1_enumeration_oracle() {
+        let checks = enumerate_marvel_check_long(0, 1, EdgePolicy::RerollLowest, 0, 0, 4);
+        assert_eq!(checks.len(), 1296);
+        let sum_total: i64 = checks.iter().map(|c| c.outcome.total).sum();
+        let m_shown_count = checks.iter().filter(|c| c.outcome.m_shown).count();
+        assert_eq!(sum_total, 12657, "E[total] * 1296 = 12657 for t1");
+        assert_eq!(m_shown_count, 36, "P(M) = 36/1296 for t1");
+    }
+
+    #[test]
+    fn marvel_check_edge_n1_chase_fantastic_enumeration_oracle() {
+        let checks = enumerate_marvel_check_long(1, 0, EdgePolicy::ChaseFantastic, 0, 0, 4);
+        assert_eq!(checks.len(), 1296);
+        let sum_total: i64 = checks.iter().map(|c| c.outcome.total).sum();
+        let m_shown_count = checks.iter().filter(|c| c.outcome.m_shown).count();
+
+        // ChaseFantastic drives the Marvel die toward M, raising P(M) above
+        // the RerollLowest baseline of 256/1296.
+        assert_eq!(m_shown_count, 396, "ChaseFantastic P(M) = 396/1296 = 11/36");
+        assert!(
+            m_shown_count > 256,
+            "ChaseFantastic m_shown_count ({m_shown_count}) must exceed RerollLowest (256)"
+        );
+
+        // Report the exact integer sum; the design doc stated ≈12.3866.
+        // 16053 / 1296 ≈ 12.3866 — assert the exact sum we computed.
+        assert_eq!(
+            sum_total, 16053,
+            "ChaseFantastic E[total] * 1296 = 16053 (≈12.3866)"
+        );
+
+        // ChaseFantastic and RerollLowest produce different total distributions.
+        let reroll_lowest_checks =
+            enumerate_marvel_check_long(1, 0, EdgePolicy::RerollLowest, 0, 0, 4);
+        let mut rl_hist = [0usize; 19];
+        let mut cf_hist = [0usize; 19];
+        for c in &reroll_lowest_checks {
+            rl_hist[c.outcome.total as usize] += 1;
+        }
+        for c in &checks {
+            cf_hist[c.outcome.total as usize] += 1;
+        }
+        assert_ne!(
+            rl_hist, cf_hist,
+            "ChaseFantastic total histogram must differ from RerollLowest"
+        );
+    }
+
+    #[test]
+    fn marvel_check_auto_fail_overrides_success() {
+        // [1,1,1]: total=3, auto_fail=true. With target=3, modifier=0, the raw
+        // total meets the target (3 >= 3) but auto-fail OVERRIDES success.
+        let mut rng = TestRng::new(vec![1, 1, 1]);
+        let check = roll_marvel_with_rng(0, 0, 3, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert_eq!(check.outcome.total, 3);
+        assert!(check.outcome.auto_fail);
+        assert!(!check.success, "auto-fail must override success");
+        assert_eq!(check.fantastic, Some(Fantastic::Failure));
+    }
+
+    #[test]
+    fn marvel_check_target_applied_fantastic_success_and_failure() {
+        // [2,1,4]: m_shown, total=12, !auto_fail.
+        // target=12 -> success=true, fantastic=Success.
+        let mut rng = TestRng::new(vec![2, 1, 4]);
+        let check = roll_marvel_with_rng(0, 0, 12, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert!(check.success);
+        assert_eq!(check.fantastic, Some(Fantastic::Success));
+
+        // target=13 -> success=false, fantastic=Failure.
+        let mut rng = TestRng::new(vec![2, 1, 4]);
+        let check = roll_marvel_with_rng(0, 0, 13, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert!(!check.success);
+        assert_eq!(check.fantastic, Some(Fantastic::Failure));
+
+        // target=12, modifier=1 -> 12+1=13>=12 success=true, fantastic=Success.
+        let mut rng = TestRng::new(vec![2, 1, 4]);
+        let check = roll_marvel_with_rng(0, 0, 12, 1, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert!(check.success);
+        assert_eq!(check.fantastic, Some(Fantastic::Success));
+
+        // target=20 -> success=false, fantastic=Failure.
+        let mut rng = TestRng::new(vec![2, 1, 4]);
+        let check = roll_marvel_with_rng(0, 0, 20, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert!(!check.success);
+        assert_eq!(check.fantastic, Some(Fantastic::Failure));
+
+        // [3,3,4]: m_shown=false, total=10 -> fantastic=None regardless of target.
+        let mut rng = TestRng::new(vec![3, 3, 4]);
+        let check = roll_marvel_with_rng(0, 0, 5, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert_eq!(check.fantastic, None);
+    }
+
+    #[test]
+    fn marvel_check_expression_carries_formatted_roll() {
+        // [3,3,4] with no modifiers: total=10, formatted as "3dMarvel[3, 3, 4] = 10".
+        let mut rng = TestRng::new(vec![3, 3, 4]);
+        let det_check =
+            roll_marvel_with_rng(0, 0, 10, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
+        assert_eq!(det_check.expression, "3dMarvel[3, 3, 4] = 10");
+        // Sanity: the public `roll_marvel` returns a MarvelCheck with an expression.
+        let check = roll_marvel(0, 0, 10, 0, EdgePolicy::RerollLowest).unwrap();
+        assert!(!check.expression.is_empty());
+    }
 }
 
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
-    use crate::ast::{Annotation, DieFace, EdgePolicy, MarvelOutcome, RollOutcome};
+    use crate::ast::{
+        Annotation, DieFace, EdgePolicy, Fantastic, MarvelCheck, MarvelOutcome, RollOutcome,
+    };
 
     #[test]
     fn roll_result_serializes_to_json() {
@@ -2232,5 +2594,45 @@ mod serde_tests {
         let restored: EdgePolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, chase);
         assert_eq!(json, r#""ChaseFantastic""#);
+    }
+
+    #[test]
+    fn fantastic_round_trips_through_serde() {
+        let success = Fantastic::Success;
+        let json = serde_json::to_string(&success).unwrap();
+        let restored: Fantastic = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, success);
+        assert_eq!(json, r#""Success""#);
+
+        let failure = Fantastic::Failure;
+        let json = serde_json::to_string(&failure).unwrap();
+        let restored: Fantastic = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, failure);
+        assert_eq!(json, r#""Failure""#);
+    }
+
+    #[test]
+    fn marvel_check_serializes_to_json() {
+        let check = MarvelCheck {
+            outcome: MarvelOutcome {
+                total: 13,
+                auto_fail: false,
+                m_shown: true,
+            },
+            target: 12,
+            modifier: 1,
+            success: true,
+            fantastic: Some(Fantastic::Success),
+            expression: "3dMarvele1[1, M, 6] = 13".to_string(),
+        };
+        let json = serde_json::to_value(&check).unwrap();
+        assert_eq!(json["outcome"]["total"], 13);
+        assert_eq!(json["outcome"]["auto_fail"], false);
+        assert_eq!(json["outcome"]["m_shown"], true);
+        assert_eq!(json["target"], 12);
+        assert_eq!(json["modifier"], 1);
+        assert_eq!(json["success"], true);
+        assert_eq!(json["fantastic"], "Success");
+        assert_eq!(json["expression"], "3dMarvele1[1, M, 6] = 13");
     }
 }

@@ -1,13 +1,15 @@
 // ABOUTME: Monte Carlo simulation for dice expressions.
 // ABOUTME: Runs many trials to compute probability distributions and statistics.
 
+use crate::ast::{EdgePolicy, Fantastic, RollOutcome};
 use crate::error::Result;
 use crate::parser;
-use crate::roller::{evaluate_total, FastRng, Rng};
+use crate::roller::{evaluate_outcome, evaluate_total, marvel_plan, FastRng, Rng};
 use std::collections::HashMap;
 
 /// Result of a Monte Carlo simulation.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct SimResult {
     /// Distribution of outcomes: value -> count.
     pub distribution: HashMap<i64, usize>,
@@ -117,16 +119,25 @@ pub fn simulate_seeded(expr: &str, n: usize, seed: u64) -> Result<SimResult> {
 
 fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResult> {
     let parsed = parser::parse(expr)?;
+    let mut totals: Vec<i64> = Vec::with_capacity(n);
+    for _ in 0..n {
+        totals.push(evaluate_total(&parsed, rng)?);
+    }
+    Ok(collect_sim_result(totals.into_iter(), n))
+}
 
+/// Aggregate an iterator of per-trial totals into a `SimResult`.
+///
+/// Shared by `simulate_with_rng` and `simulate_marvel_with_rng` so both
+/// produce identical distribution/statistics semantics.
+fn collect_sim_result(totals: impl Iterator<Item = i64>, n: usize) -> SimResult {
     let mut distribution: HashMap<i64, usize> = HashMap::new();
     let mut sum: i64 = 0;
     let mut sum_sq: i64 = 0;
     let mut min = i64::MAX;
     let mut max = i64::MIN;
 
-    for _ in 0..n {
-        let total = evaluate_total(&parsed, rng)?;
-
+    for total in totals {
         *distribution.entry(total).or_insert(0) += 1;
         sum += total;
         sum_sq += total * total;
@@ -138,14 +149,157 @@ fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResu
     let variance = (sum_sq as f64 / n as f64) - (mean * mean);
     let std_dev = variance.sqrt();
 
-    Ok(SimResult {
+    SimResult {
         distribution,
         min,
         max,
         mean,
         std_dev,
         n,
+    }
+}
+
+/// Result of a Marvel Multiverse Monte Carlo simulation.
+///
+/// Per-trial booleans (success, fantastic, auto_fail, m_shown) are aggregated
+/// directly from each trial's `MarvelOutcome` — they cannot be recovered from
+/// the total histogram alone, because `auto_fail` and `m_shown` depend on the
+/// middle die face, not on the total.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct MarvelSimResult {
+    /// Number of trials run.
+    pub n: usize,
+    /// Target value the check is compared against.
+    pub target: i64,
+    /// Modifier added to the total before comparison.
+    pub modifier: i64,
+    /// Fraction of trials that succeeded: `(total + modifier >= target) && !auto_fail`.
+    pub success_rate: f64,
+    /// Fraction of trials that were Fantastic successes (m_shown && success).
+    pub fantastic_success_rate: f64,
+    /// Fraction of trials that were Fantastic failures (m_shown && !success).
+    pub fantastic_failure_rate: f64,
+    /// Fraction of trials that auto-failed (raw `1 / M / 1`).
+    pub auto_fail_rate: f64,
+    /// Fraction of trials where the Marvel die showed M.
+    pub m_shown_rate: f64,
+    /// Distribution and statistics of the Marvel totals.
+    pub total: SimResult,
+}
+
+/// Run a Marvel Multiverse Monte Carlo simulation with a custom RNG.
+///
+/// Each trial builds the canonical Marvel `RollPlan` (with the given Edge and
+/// Trouble counts and Edge policy), evaluates it via `evaluate_outcome`, and
+/// aggregates per-trial booleans alongside the total histogram.
+pub(crate) fn simulate_marvel_with_rng(
+    edges: u32,
+    troubles: u32,
+    target: i64,
+    modifier: i64,
+    policy: EdgePolicy,
+    n: usize,
+    rng: &mut impl Rng,
+) -> Result<MarvelSimResult> {
+    let plan = marvel_plan(edges, troubles, policy);
+    let expr = crate::ast::Expr::Roll(plan);
+
+    let mut totals: Vec<i64> = Vec::with_capacity(n);
+    let mut success_count = 0usize;
+    let mut fantastic_success_count = 0usize;
+    let mut fantastic_failure_count = 0usize;
+    let mut auto_fail_count = 0usize;
+    let mut m_shown_count = 0usize;
+
+    for _ in 0..n {
+        let outcome = evaluate_outcome(&expr, rng)?;
+        let o = match outcome {
+            RollOutcome::Marvel(o) => o,
+            RollOutcome::Numeric(_) | RollOutcome::Successes(_) => {
+                return Err(crate::error::Error::InvalidMarvelRoll(
+                    "Marvel plan produced a non-Marvel outcome".to_string(),
+                ));
+            }
+        };
+        let success = (o.total + modifier >= target) && !o.auto_fail;
+        let fantastic = o.m_shown.then_some(if success {
+            Fantastic::Success
+        } else {
+            Fantastic::Failure
+        });
+        if success {
+            success_count += 1;
+        }
+        if fantastic == Some(Fantastic::Success) {
+            fantastic_success_count += 1;
+        }
+        if fantastic == Some(Fantastic::Failure) {
+            fantastic_failure_count += 1;
+        }
+        if o.auto_fail {
+            auto_fail_count += 1;
+        }
+        if o.m_shown {
+            m_shown_count += 1;
+        }
+        totals.push(o.total);
+    }
+
+    let total = collect_sim_result(totals.into_iter(), n);
+    let n_f = n as f64;
+    Ok(MarvelSimResult {
+        n,
+        target,
+        modifier,
+        success_rate: success_count as f64 / n_f,
+        fantastic_success_rate: fantastic_success_count as f64 / n_f,
+        fantastic_failure_rate: fantastic_failure_count as f64 / n_f,
+        auto_fail_rate: auto_fail_count as f64 / n_f,
+        m_shown_rate: m_shown_count as f64 / n_f,
+        total,
     })
+}
+
+/// Run a Marvel Multiverse Monte Carlo simulation with the default RNG.
+pub fn simulate_marvel(
+    edges: u32,
+    troubles: u32,
+    target: i64,
+    modifier: i64,
+    policy: EdgePolicy,
+    n: usize,
+) -> Result<MarvelSimResult> {
+    simulate_marvel_with_rng(
+        edges,
+        troubles,
+        target,
+        modifier,
+        policy,
+        n,
+        &mut FastRng::new(),
+    )
+}
+
+/// Run a Marvel Multiverse Monte Carlo simulation with a seeded RNG.
+pub fn simulate_marvel_seeded(
+    edges: u32,
+    troubles: u32,
+    target: i64,
+    modifier: i64,
+    policy: EdgePolicy,
+    n: usize,
+    seed: u64,
+) -> Result<MarvelSimResult> {
+    simulate_marvel_with_rng(
+        edges,
+        troubles,
+        target,
+        modifier,
+        policy,
+        n,
+        &mut FastRng::with_seed(seed),
+    )
 }
 
 #[cfg(test)]
@@ -279,5 +433,230 @@ mod tests {
         for i in 1..cum.len() {
             assert!(cum[i].1 >= cum[i - 1].1);
         }
+    }
+
+    // --- Marvel simulate API tests ---
+
+    use crate::ast::EdgePolicy;
+    use crate::roller::{roll_marvel_with_rng, Rng};
+
+    /// A deterministic `Rng` for testing that cycles through its value vec.
+    struct TestRng {
+        values: Vec<u32>,
+        index: usize,
+    }
+
+    impl TestRng {
+        fn new(values: Vec<u32>) -> Self {
+            Self { values, index: 0 }
+        }
+    }
+
+    impl Rng for TestRng {
+        fn roll(&mut self, _max: u32) -> u32 {
+            let value = self.values[self.index % self.values.len()];
+            self.index += 1;
+            value
+        }
+    }
+
+    /// Build a `TestRng` that cycles through all 216 ordered Marvel triples
+    /// (3 RNG draws per trial, 216 trials).
+    fn marvel_cycle_216_rng() -> TestRng {
+        let mut values = Vec::with_capacity(216 * 3);
+        for l in 1..=6u32 {
+            for m in 1..=6u32 {
+                for r in 1..=6u32 {
+                    values.push(l);
+                    values.push(m);
+                    values.push(r);
+                }
+            }
+        }
+        TestRng::new(values)
+    }
+
+    #[test]
+    fn simulate_marvel_rates_match_exhaustive_enumeration() {
+        let mut rng = marvel_cycle_216_rng();
+        let result =
+            simulate_marvel_with_rng(0, 0, 12, 0, EdgePolicy::RerollLowest, 216, &mut rng).unwrap();
+
+        assert!((result.m_shown_rate - 36.0 / 216.0).abs() < 1e-12);
+        assert!((result.auto_fail_rate - 1.0 / 216.0).abs() < 1e-12);
+
+        // Compute the expected success count by directly enumerating the 216
+        // triples through `roll_marvel_with_rng` with the same target/modifier.
+        // Per-trial aggregation matters: success is (total + modifier >= target
+        // && !auto_fail), which cannot be recovered from the total histogram
+        // alone (auto_fail triples have total=3 which would otherwise pass).
+        let mut expected_success = 0usize;
+        for l in 1..=6u32 {
+            for m in 1..=6u32 {
+                for r in 1..=6u32 {
+                    let mut trial_rng = TestRng::new(vec![l, m, r]);
+                    let check =
+                        roll_marvel_with_rng(0, 0, 12, 0, EdgePolicy::RerollLowest, &mut trial_rng)
+                            .unwrap();
+                    if check.success {
+                        expected_success += 1;
+                    }
+                }
+            }
+        }
+        let expected_success_rate = expected_success as f64 / 216.0;
+        assert!(
+            (result.success_rate - expected_success_rate).abs() < 1e-12,
+            "success_rate {} must match direct enumeration {}",
+            result.success_rate,
+            expected_success_rate
+        );
+
+        // The total histogram must match the 216 base enumeration.
+        let expected = [
+            0, 0, 0, 1, 1, 3, 6, 10, 15, 22, 26, 28, 28, 26, 20, 14, 9, 5, 2,
+        ];
+        for (total, &expected_count) in expected.iter().enumerate().skip(3) {
+            let count = *result.total.distribution.get(&(total as i64)).unwrap_or(&0);
+            assert_eq!(
+                count, expected_count,
+                "total {total}: got {count}, expected {expected_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn simulate_marvel_seeded_reproducible_smoke() {
+        let a = simulate_marvel_seeded(0, 0, 12, 0, EdgePolicy::RerollLowest, 1000, 42).unwrap();
+        let b = simulate_marvel_seeded(0, 0, 12, 0, EdgePolicy::RerollLowest, 1000, 42).unwrap();
+        assert_eq!(a.success_rate, b.success_rate);
+        assert_eq!(a.m_shown_rate, b.m_shown_rate);
+        assert_eq!(a.auto_fail_rate, b.auto_fail_rate);
+        assert_eq!(a.total.distribution, b.total.distribution);
+    }
+
+    #[test]
+    fn simulate_marvel_all_ones_aggregates_auto_fail_and_fantastic_failure() {
+        // All-ones rolls: auto-fail, m_shown, total=3, success=false (auto_fail),
+        // fantastic=Failure. Exercises the sim per-trial boolean aggregation.
+        let mut rng = TestRng::new(vec![1; 600]);
+        let result =
+            simulate_marvel_with_rng(0, 0, 12, 0, EdgePolicy::RerollLowest, 200, &mut rng).unwrap();
+        assert_eq!(result.n, 200);
+        assert_eq!(result.target, 12);
+        assert_eq!(result.modifier, 0);
+        assert!((result.auto_fail_rate - 1.0).abs() < 1e-12);
+        assert!((result.m_shown_rate - 1.0).abs() < 1e-12);
+        assert!((result.success_rate - 0.0).abs() < 1e-12);
+        assert!((result.fantastic_success_rate - 0.0).abs() < 1e-12);
+        assert!((result.fantastic_failure_rate - 1.0).abs() < 1e-12);
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::{MarvelSimResult, SimResult};
+    use crate::ast::{EdgePolicy, Fantastic};
+    use crate::roller::Rng;
+    use std::collections::HashMap;
+
+    /// A deterministic `Rng` for testing that cycles through its value vec.
+    struct TestRng {
+        values: Vec<u32>,
+        index: usize,
+    }
+
+    impl TestRng {
+        fn new(values: Vec<u32>) -> Self {
+            Self { values, index: 0 }
+        }
+    }
+
+    impl Rng for TestRng {
+        fn roll(&mut self, _max: u32) -> u32 {
+            let value = self.values[self.index % self.values.len()];
+            self.index += 1;
+            value
+        }
+    }
+
+    #[test]
+    fn sim_result_serializes_to_json() {
+        let mut distribution: HashMap<i64, usize> = HashMap::new();
+        distribution.insert(7, 60);
+        distribution.insert(2, 40);
+        let result = SimResult {
+            distribution,
+            min: 2,
+            max: 7,
+            mean: 5.0,
+            std_dev: 2.5,
+            n: 100,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["min"], 2);
+        assert_eq!(json["max"], 7);
+        assert_eq!(json["mean"], 5.0);
+        assert_eq!(json["std_dev"], 2.5);
+        assert_eq!(json["n"], 100);
+        assert_eq!(json["distribution"]["7"], 60);
+        assert_eq!(json["distribution"]["2"], 40);
+    }
+
+    #[test]
+    fn marvel_sim_result_serializes_to_json() {
+        let mut distribution: HashMap<i64, usize> = HashMap::new();
+        distribution.insert(3, 200);
+        let total = SimResult {
+            distribution,
+            min: 3,
+            max: 3,
+            mean: 3.0,
+            std_dev: 0.0,
+            n: 200,
+        };
+        let result = MarvelSimResult {
+            n: 200,
+            target: 12,
+            modifier: 0,
+            success_rate: 0.0,
+            fantastic_success_rate: 0.0,
+            fantastic_failure_rate: 1.0,
+            auto_fail_rate: 1.0,
+            m_shown_rate: 1.0,
+            total,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["n"], 200);
+        assert_eq!(json["target"], 12);
+        assert_eq!(json["modifier"], 0);
+        assert_eq!(json["success_rate"], 0.0);
+        assert_eq!(json["fantastic_success_rate"], 0.0);
+        assert_eq!(json["fantastic_failure_rate"], 1.0);
+        assert_eq!(json["auto_fail_rate"], 1.0);
+        assert_eq!(json["m_shown_rate"], 1.0);
+        assert_eq!(json["total"]["n"], 200);
+        assert_eq!(json["total"]["min"], 3);
+    }
+
+    #[test]
+    fn marvel_sim_result_serializes_with_fantastic_success_field() {
+        // Drive a small Marvel sim that produces at least one fantastic success
+        // so the `fantastic_success_rate` field is exercised through serde.
+        // Rolls [6,1,6] produce total=18, m_shown, !auto_fail, success vs target=12.
+        let mut values = Vec::with_capacity(60);
+        for _ in 0..20 {
+            values.extend_from_slice(&[6, 1, 6]);
+        }
+        let mut rng = TestRng::new(values);
+        let result =
+            super::simulate_marvel_with_rng(0, 0, 12, 0, EdgePolicy::RerollLowest, 20, &mut rng)
+                .unwrap();
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["fantastic_success_rate"], 1.0);
+        assert_eq!(json["m_shown_rate"], 1.0);
+        // Round-trip the Fantastic value through the serialized JSON shape.
+        let fantastic_json = serde_json::to_string(&Fantastic::Success).unwrap();
+        assert_eq!(fantastic_json, r#""Success""#);
     }
 }
