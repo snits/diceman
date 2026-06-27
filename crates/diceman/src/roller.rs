@@ -465,8 +465,8 @@ impl<R: Rng> Evaluator<'_, R> {
             let old_rank = Self::marvel_rank(target, old_face);
             let new_face = self.roll_die(&DieKind::MarvelD6);
             let new_rank = Self::marvel_rank(target, new_face);
+            dice[target].history.push(DieFace::Numeric(new_face));
             if new_rank > old_rank {
-                dice[target].history.push(DieFace::Numeric(new_face));
                 dice[target].face = DieFace::Numeric(new_face);
             }
         }
@@ -484,8 +484,8 @@ impl<R: Rng> Evaluator<'_, R> {
             let old_rank = Self::marvel_rank(target, old_face);
             let new_face = self.roll_die(&DieKind::MarvelD6);
             let new_rank = Self::marvel_rank(target, new_face);
+            dice[target].history.push(DieFace::Numeric(new_face));
             if new_rank < old_rank {
-                dice[target].history.push(DieFace::Numeric(new_face));
                 dice[target].face = DieFace::Numeric(new_face);
             }
         }
@@ -1931,6 +1931,19 @@ mod tests {
     }
 
     #[test]
+    fn marvel_edge_records_rejected_reroll_in_history() {
+        // Initial [5,3,4], Edge targets index1. Reroll 2 is rejected, but the
+        // attempted face remains in history for consumers inspecting traces.
+        let mut rng = TestRng::new(vec![5, 3, 4, 2]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvele1").unwrap(), &mut rng).unwrap();
+        assert_eq!(result.dice[1].face, DieFace::Numeric(3));
+        assert_eq!(
+            result.dice[1].history,
+            vec![DieFace::Numeric(3), DieFace::Numeric(2)]
+        );
+    }
+
+    #[test]
     fn marvel_trouble_keeps_4_over_m_worse_by_rank() {
         // Initial [2,1,3] (ranks 2,7,3 → highest is index1 M rank7).
         // Trouble rerolls index1 → 4. New rank 4 < 7 ⇒ keep worse (4).
@@ -1945,6 +1958,19 @@ mod tests {
             }
             other => panic!("expected Marvel outcome, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn marvel_trouble_records_rejected_reroll_in_history() {
+        // Initial [2,1,3], Trouble targets the Marvel die. Reroll M has equal
+        // rank, so the current face stays while the attempted face is recorded.
+        let mut rng = TestRng::new(vec![2, 1, 3, 1]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvelt1").unwrap(), &mut rng).unwrap();
+        assert_eq!(result.dice[1].face, DieFace::Numeric(1));
+        assert_eq!(
+            result.dice[1].history,
+            vec![DieFace::Numeric(1), DieFace::Numeric(1)]
+        );
     }
 
     // --- Marvel Edge/Trouble exhaustive enumeration oracles ---
@@ -2507,6 +2533,17 @@ mod tests {
             roll_marvel_with_rng(0, 1, 7, 0, EdgePolicy::RerollLowest, &mut rng).unwrap();
         assert_eq!(det_check.expression, "3dMarvelt1[3, 3, 1] = 7");
         assert_eq!(det_check.outcome.total, 7);
+    }
+
+    #[test]
+    fn marvel_check_chase_fantastic_expression_uses_public_edge_notation() {
+        // ChaseFantastic is selected by typed API/CLI policy, not by parser notation.
+        // The formatted expression should not invent a policy suffix that the parser
+        // does not accept as Marvel notation.
+        let mut rng = TestRng::new(vec![2, 5, 4, 1]);
+        let det_check =
+            roll_marvel_with_rng(1, 0, 10, 0, EdgePolicy::ChaseFantastic, &mut rng).unwrap();
+        assert_eq!(det_check.expression, "3dMarvele1[2, M, 4] = 12 (M shown)");
     }
 }
 

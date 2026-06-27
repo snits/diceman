@@ -16,6 +16,7 @@ cargo install --path crates/diceman-cli
 diceman roll "4d6kh3"        # Roll 4d6, keep highest 3
 diceman roll "2d6 + 5"       # Roll 2d6 and add 5
 diceman roll "1d20 + 7"      # Attack roll with modifier
+diceman roll "3dMarvel"      # Roll a Marvel Multiverse d616 pool
 ```
 
 **Note:** Quote expressions containing `>`, `<`, `!`, or `*` to prevent shell interpretation.
@@ -25,6 +26,14 @@ diceman roll "1d20 + 7"      # Attack roll with modifier
 ```bash
 diceman sim "2d6" -n 10000   # Simulate 10,000 rolls
 diceman sim "4d6kh3" --json  # Output as JSON
+```
+
+### Marvel Multiverse checks
+
+```bash
+diceman marvel --target 12 --edges 1
+diceman marvel --target 12 --edges 1 --policy chase_fantastic
+diceman marvel --target 12 --sim 10000 --json
 ```
 
 ### Show notation help
@@ -45,8 +54,9 @@ diceman uses Roll20-compatible dice notation with some extensions.
 | `dS` | Roll 1 die (shorthand for 1dS) |
 | `d%` | Percentile die (d100) |
 | `dF` | Fudge die (-1, 0, +1) |
+| `3dMarvel` | Marvel Multiverse d616 roll |
 
-**Examples:** `2d6`, `1d20`, `4dF`, `d%`
+**Examples:** `2d6`, `1d20`, `4dF`, `d%`, `3dMarvel`
 
 ### Digit Dice
 
@@ -135,6 +145,29 @@ Count dice that meet a condition instead of summing values.
 - `6d6>4` - Count 5s and 6s
 - `8d6=6` - Count only 6s
 
+### Marvel Multiverse
+
+`3dMarvel` rolls three d6s as a Marvel Multiverse d616 pool. The middle die is
+the Marvel die: a 1 on that die displays as `M` and counts as 6, except a raw
+`1 / M / 1` is an auto-fail with total 3.
+
+| Notation | Description |
+|----------|-------------|
+| `3dMarvel` | Roll the d616 pool |
+| `3dMarveleN` | Apply Edge N times: reroll the lowest-ranked die and keep the better result |
+| `3dMarveltN` | Apply Trouble N times: reroll the highest-ranked die and keep the worse result |
+
+Edge and Trouble cancel before rolling (`3dMarvele2t1` is equivalent to
+`3dMarvele1`). The Marvel die ranks above a 6 when it shows `M`.
+Chase-fantastic Edge is available through the typed Rust/Python APIs and
+`diceman marvel --policy chase_fantastic`; it has no notation token.
+
+**Examples:**
+- `3dMarvel` - Roll the base d616 pool
+- `3dMarvele1` - Roll with Edge
+- `3dMarvelt1` - Roll with Trouble
+- `diceman marvel --target 12 --edges 1` - Roll a target check and report the verdict
+
 ### Critical Markers
 
 Mark dice results as critical successes or failures for visual feedback.
@@ -165,6 +198,9 @@ Mark dice results as critical successes or failures for visual feedback.
 ### Modifier Order
 
 Modifiers are applied in this order: **reroll, explode, keep/drop, success count**
+
+Marvel Edge/Trouble modifiers are normalized first: Edge and Trouble cancel 1:1,
+then the remaining Marvel-specific rerolls apply to the d616 pool.
 
 This means `4d6r!kh3` will:
 1. Reroll any 1s

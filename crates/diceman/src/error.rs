@@ -17,6 +17,9 @@ pub enum Error {
     #[error("Invalid dice count: {0}")]
     InvalidDiceCount(u32),
 
+    #[error("Invalid trial count: {0}")]
+    InvalidTrialCount(usize),
+
     #[error("Invalid die kind: {0}")]
     InvalidDieKind(u32),
 

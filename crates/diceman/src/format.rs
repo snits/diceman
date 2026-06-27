@@ -106,7 +106,7 @@ fn modifiers_str(plan: &RollPlan) -> String {
             }
             RollModifier::Edge { count, policy } => match policy {
                 EdgePolicy::RerollLowest => format!("e{}", count),
-                EdgePolicy::ChaseFantastic => format!("e{}c", count),
+                EdgePolicy::ChaseFantastic => format!("e{}", count),
             },
             RollModifier::Trouble { count } => format!("t{}", count),
         })

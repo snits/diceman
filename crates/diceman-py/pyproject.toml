@@ -24,6 +24,11 @@ classifiers = [
 ]
 keywords = ["dice", "ttrpg", "rpg", "dnd", "roll20"]
 
+[dependency-groups]
+dev = [
+    "maturin>=1.0,<2.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/jsnitsel/diceman"
 Repository = "https://github.com/jsnitsel/diceman"

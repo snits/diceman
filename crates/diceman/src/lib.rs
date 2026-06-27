@@ -27,6 +27,29 @@
 //! - Drop highest/lowest: `4d6dh1`, `4d6dl1`
 //! - Exploding dice: `1d6!`, `1d6!>5`
 //! - Reroll: `1d6r`, `1d6r<3`
+//! - Digit dice: `D66`, `D666`
+//! - Critical markers: `1d20cs20cf1`
+//! - Marvel Multiverse: `3dMarvel`, `3dMarvele1`, `3dMarvelt1`
+//!
+//! ## Marvel Multiverse
+//!
+//! `3dMarvel` rolls a Marvel Multiverse d616 pool. The middle die is the
+//! Marvel die: a 1 on that die displays as `M` and counts as 6, except a raw
+//! `1 / M / 1` is an auto-fail with total 3.
+//!
+//! Marvel Edge and Trouble use `eN` and `tN` notation. Edge rerolls the
+//! lowest-ranked die and keeps the better result; Trouble rerolls the
+//! highest-ranked die and keeps the worse result. Chase-fantastic Edge is
+//! available through `roll_marvel`, `simulate_marvel`, and the CLI/Python
+//! policy option; it has no notation token.
+//!
+//! ```
+//! use diceman::{roll_marvel, EdgePolicy};
+//!
+//! let check = roll_marvel(1, 0, 12, 0, EdgePolicy::RerollLowest).unwrap();
+//! println!("{}", check.expression);
+//! println!("success: {}", check.success);
+//! ```
 
 pub mod ast;
 pub mod error;
