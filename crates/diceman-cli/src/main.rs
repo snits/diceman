@@ -51,7 +51,7 @@ enum Commands {
         troubles: u32,
 
         /// Target value for the check
-        #[arg(long, default_value_t = 0)]
+        #[arg(long)]
         target: i64,
 
         /// Modifier added to the total before comparison
@@ -466,6 +466,7 @@ MARVEL MULTIVERSE
 
 MODIFIER ORDER
   Modifiers apply: reroll -> explode -> keep/drop -> success count
+  Marvel Edge/Trouble first cancel 1:1, then the remaining Marvel rerolls apply.
   Example: 4d6r!kh3 rerolls 1s, explodes 6s, then keeps highest 3"#
     );
 }
@@ -566,6 +567,16 @@ mod tests {
         assert!(parse_policy("bogus").is_err());
         assert!(parse_policy("").is_err());
         assert!(parse_policy("RerollLowest").is_err());
+    }
+
+    #[test]
+    fn marvel_command_requires_target() {
+        let result = Cli::try_parse_from(["diceman", "marvel"]);
+        assert!(matches!(
+            result,
+            Err(err) if err.kind() == clap::error::ErrorKind::MissingRequiredArgument
+        ));
+        assert!(Cli::try_parse_from(["diceman", "marvel", "--target", "12"]).is_ok());
     }
 
     fn marvel_check(

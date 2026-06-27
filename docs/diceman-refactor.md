@@ -553,13 +553,39 @@ Update:
 
 Phase 8
 
-Implement Marvel support.
+Marvel Multiverse support.
 
-Add:
+The evaluator supports Marvel Multiverse d616 rolls through the same pipeline
+used by other dice systems:
 
 * DieKind::MarvelD6
 * ScoringMode::MarvelMultiverse
-* MarvelFantastic annotation
+* RollOutcome::Marvel
+* AnnotationRule::MarvelFantastic
+* Annotation::Fantastic
+* Annotation::AutoFail
+
+The notation surface is:
+
+* 3dMarvel
+* 3dMarveleN
+* 3dMarveltN
+
+The middle die is the Marvel die. A 1 on that die displays as M and counts as 6,
+except a raw 1 / M / 1 auto-fails with total 3. Edge rerolls the lowest-ranked
+die and keeps the better result; Trouble rerolls the highest-ranked die and
+keeps the worse result. Edge and Trouble cancel before rolling.
+
+Target checks and simulations are exposed through typed APIs:
+
+* roll_marvel
+* simulate_marvel
+* simulate_marvel_seeded
+
+Those APIs return MarvelCheck and MarvelSimResult so consumers can use
+success, Fantastic success/failure, auto-fail, M-shown, and total-distribution
+facts without deriving them from formatted strings. Chase-fantastic Edge is an
+API policy only; it has no notation token.
 
 ⸻
 

@@ -118,6 +118,7 @@ pub fn simulate_seeded(expr: &str, n: usize, seed: u64) -> Result<SimResult> {
 }
 
 fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResult> {
+    validate_trial_count(n)?;
     let parsed = parser::parse(expr)?;
 
     let mut distribution: HashMap<i64, usize> = HashMap::new();
@@ -136,6 +137,13 @@ fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResu
     }
 
     Ok(finalize_sim_result(distribution, sum, sum_sq, min, max, n))
+}
+
+fn validate_trial_count(n: usize) -> Result<()> {
+    if n == 0 {
+        return Err(Error::InvalidTrialCount(n));
+    }
+    Ok(())
 }
 
 /// Assemble a `SimResult` from streaming accumulators.
@@ -208,6 +216,7 @@ pub(crate) fn simulate_marvel_with_rng(
     n: usize,
     rng: &mut impl Rng,
 ) -> Result<MarvelSimResult> {
+    validate_trial_count(n)?;
     let plan = marvel_plan(edges, troubles, policy);
     let expr = Expr::Roll(plan);
 
@@ -313,6 +322,7 @@ pub fn simulate_marvel_seeded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
 
     #[test]
     fn test_simulate_basic() {
@@ -325,6 +335,12 @@ mod tests {
 
         // Mean should be close to 3.5
         assert!((result.mean - 3.5).abs() < 0.5);
+    }
+
+    #[test]
+    fn simulate_rejects_zero_trials() {
+        let err = simulate("1d6", 0).unwrap_err();
+        assert!(matches!(err, Error::InvalidTrialCount(0)));
     }
 
     #[test]
@@ -541,6 +557,12 @@ mod tests {
         assert_eq!(a.m_shown_rate, b.m_shown_rate);
         assert_eq!(a.auto_fail_rate, b.auto_fail_rate);
         assert_eq!(a.total.distribution, b.total.distribution);
+    }
+
+    #[test]
+    fn simulate_marvel_rejects_zero_trials() {
+        let err = simulate_marvel(0, 0, 12, 0, EdgePolicy::RerollLowest, 0).unwrap_err();
+        assert!(matches!(err, Error::InvalidTrialCount(0)));
     }
 
     #[test]
