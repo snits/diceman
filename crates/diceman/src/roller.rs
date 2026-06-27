@@ -536,7 +536,12 @@ impl<R: Rng> Evaluator<'_, R> {
             ),
             ScoringMode::MarvelMultiverse => {
                 // Contract: 3 dice, index 1 = Marvel die, all DieFace::Numeric.
-                debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
+                if dice.len() != 3 {
+                    return Err(Error::InvalidMarvelRoll(format!(
+                        "Marvel Multiverse scoring requires exactly 3 dice, got {}",
+                        dice.len()
+                    )));
+                }
                 let l = dice[0].face.as_numeric();
                 let m = dice[1].face.as_numeric();
                 let r = dice[2].face.as_numeric();
@@ -1725,6 +1730,32 @@ mod tests {
             },
         ];
         Evaluator::<TestRng>::score(&dice, &ScoringMode::MarvelMultiverse).unwrap()
+    }
+
+    #[test]
+    fn marvel_score_rejects_non_three_die_pool() {
+        // `score` is reachable through the public `evaluate` with a hand-built
+        // `RollPlan`, whose pub fields do not enforce the 3-die Marvel contract.
+        // A pool that is not exactly three dice must return an error rather than
+        // panic in debug or index out of bounds in release.
+        let short = vec![
+            DieResult {
+                face: DieFace::Numeric(3),
+                history: vec![DieFace::Numeric(3)],
+                dropped: false,
+                is_crit_success: false,
+                is_crit_failure: false,
+            },
+            DieResult {
+                face: DieFace::Numeric(4),
+                history: vec![DieFace::Numeric(4)],
+                dropped: false,
+                is_crit_success: false,
+                is_crit_failure: false,
+            },
+        ];
+        let result = Evaluator::<TestRng>::score(&short, &ScoringMode::MarvelMultiverse);
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
     }
 
     #[test]

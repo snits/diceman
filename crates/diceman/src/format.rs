@@ -105,6 +105,10 @@ fn modifiers_str(plan: &RollPlan) -> String {
                 s
             }
             RollModifier::Edge { count, policy } => match policy {
+                // Both policies render as the `eN` token: ChaseFantastic has no
+                // notation form of its own (it is an API/CLI-only policy), so it
+                // shares Edge's token. The arms are kept explicit so a future
+                // EdgePolicy variant must decide its own rendering.
                 EdgePolicy::RerollLowest => format!("e{}", count),
                 EdgePolicy::ChaseFantastic => format!("e{}", count),
             },

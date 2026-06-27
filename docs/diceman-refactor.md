@@ -444,6 +444,30 @@ RollPlan {
 
 ⸻
 
+As-Built Type Reconciliation (Phases 1–8)
+
+The type sketches above were written before implementation and describe intent.
+The shipped types differ in the following ways. Phase 9 (Genesys / narrative
+dice) is not yet implemented, so its types are absent by design.
+
+* DieKind::Numeric is named DieKind::Number in code.
+* RollOutcome::Structured(GameAgnosticOutcome) shipped as the concrete
+  RollOutcome::Marvel(MarvelOutcome); GameAgnosticOutcome was never created.
+  RollOutcome::Symbols is deferred to Phase 9.
+* FaceCondition is named Condition throughout (faces remain numeric until
+  symbol faces land in Phase 9).
+* DieResult does not carry annotations: Vec<Annotation>. Per-die crits are two
+  bools (is_crit_success / is_crit_failure); pool-level annotations live on
+  RollResult.annotations.
+* Explode does not use a mode: ExplodeMode enum. It uses compounding: bool and
+  penetrating: bool.
+* RollModifier gained Edge { count, policy } and Trouble { count } in Phase 8
+  (omitted from the catalog above).
+* Annotation ships Fantastic and AutoFail. The catalog's Success / Failure and
+  the reserved CriticalSuccess / CriticalFailure variants have no producers yet.
+
+⸻
+
 Migration Plan
 
 Phase 1
