@@ -346,6 +346,23 @@ impl<R: Rng> Evaluator<'_, R> {
             .collect()
     }
 
+    /// Canonical application phase for a modifier: reroll (0), explode (1),
+    /// then keep/drop (2). Edge/Trouble are consumed by the Marvel pre-pass
+    /// and never reach this ordering.
+    fn modifier_phase(modifier: &RollModifier) -> u8 {
+        match modifier {
+            RollModifier::Reroll { .. } => 0,
+            RollModifier::Explode { .. } => 1,
+            RollModifier::KeepHighest(_)
+            | RollModifier::KeepLowest(_)
+            | RollModifier::DropHighest(_)
+            | RollModifier::DropLowest(_) => 2,
+            RollModifier::Edge { .. } | RollModifier::Trouble { .. } => {
+                unreachable!("Edge/Trouble are handled by the Marvel pre-pass")
+            }
+        }
+    }
+
     /// Apply modifiers. Marvel Edge/Trouble are normalized and applied as a
     /// pre-pass before the standard reroll -> explode -> keep/drop sequence.
     fn apply_modifiers(
@@ -354,7 +371,7 @@ impl<R: Rng> Evaluator<'_, R> {
         kind: &DieKind,
         modifiers: &[RollModifier],
     ) -> Result<()> {
-        let (marvel, rest): (Vec<&RollModifier>, Vec<&RollModifier>) = modifiers
+        let (marvel, mut rest): (Vec<&RollModifier>, Vec<&RollModifier>) = modifiers
             .iter()
             .partition(|m| matches!(m, RollModifier::Edge { .. } | RollModifier::Trouble { .. }));
 
@@ -366,6 +383,12 @@ impl<R: Rng> Evaluator<'_, R> {
             }
             self.apply_marvel_edge_trouble(dice, &marvel)?;
         }
+
+        // Apply phases in the canonical reroll -> explode -> keep/drop order
+        // regardless of how the modifiers were written in the notation. The
+        // sort is stable, so multiple modifiers within one phase keep their
+        // relative order.
+        rest.sort_by_key(|m| Self::modifier_phase(m));
 
         for modifier in rest {
             match modifier {
@@ -1571,6 +1594,50 @@ mod tests {
         let mut rng = TestRng::new(vec![5, 3]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.outcome, RollOutcome::Numeric(8));
+    }
+
+    #[test]
+    fn test_reroll_keep_phase_order_independent_of_notation() {
+        // Modifier phases apply as reroll -> keep/drop regardless of the order
+        // written in the notation. `4d6kh3r` and `4d6rkh3` must compute the
+        // same result on the same RNG stream.
+        let stream = vec![1, 2, 3, 4, 6];
+
+        let written_keep_first = crate::parse("4d6kh3r").unwrap();
+        let mut rng = TestRng::new(stream.clone());
+        let keep_first = evaluate_with_rng(&written_keep_first, &mut rng).unwrap();
+
+        let written_reroll_first = crate::parse("4d6rkh3").unwrap();
+        let mut rng = TestRng::new(stream);
+        let reroll_first = evaluate_with_rng(&written_reroll_first, &mut rng).unwrap();
+
+        assert_eq!(keep_first.outcome, reroll_first.outcome);
+        let kept_keep_first: Vec<i64> = keep_first
+            .dice
+            .iter()
+            .filter(|d| !d.dropped)
+            .map(|d| d.face.as_numeric())
+            .collect();
+        let kept_reroll_first: Vec<i64> = reroll_first
+            .dice
+            .iter()
+            .filter(|d| !d.dropped)
+            .map(|d| d.face.as_numeric())
+            .collect();
+        assert_eq!(kept_keep_first, kept_reroll_first);
+    }
+
+    #[test]
+    fn test_low_die_rerolled_before_keep_highest_drops_it() {
+        // A die low enough that keep-highest would drop it must still be
+        // rerolled first. Stream [1, 2, 3, 4] then 6 as the reroll: the 1 is
+        // rerolled to 6, then keep-highest-3 drops the 2. Total = 6 + 3 + 4.
+        // Applying keep first would drop the 1 and the reroll would skip it,
+        // yielding 2 + 3 + 4 = 9.
+        let expr = crate::parse("4d6kh3r").unwrap();
+        let mut rng = TestRng::new(vec![1, 2, 3, 4, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(13));
     }
 
     // --- Error path tests ---
