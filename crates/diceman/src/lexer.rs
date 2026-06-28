@@ -244,17 +244,13 @@ impl<'a> Lexer<'a> {
     }
 
     fn word(&mut self, expected: &str, token: Token) -> Result<Token> {
-        let start_pos = self.pos;
         for expected_ch in expected.chars() {
             match self.chars.peek().copied() {
                 Some((_, ch)) if ch.eq_ignore_ascii_case(&expected_ch) => {
                     self.chars.next();
                 }
                 Some((pos, ch)) => return Err(Error::UnexpectedChar(ch, pos)),
-                None => {
-                    let first = expected.chars().next().unwrap_or_default();
-                    return Err(Error::UnexpectedChar(first, start_pos));
-                }
+                None => return Err(Error::UnexpectedEof),
             }
         }
 
@@ -367,10 +363,15 @@ mod tests {
         let mut lexer = Lexer::new("3dm");
         assert_eq!(lexer.next_token().unwrap(), Token::Number(3));
         assert_eq!(lexer.next_token().unwrap(), Token::D);
-        assert!(matches!(
-            lexer.next_token(),
-            Err(Error::UnexpectedChar('m', 2))
-        ));
+        assert!(matches!(lexer.next_token(), Err(Error::UnexpectedEof)));
+    }
+
+    #[test]
+    fn test_truncated_marvel_keyword_errors() {
+        let mut lexer = Lexer::new("3dMarve");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(3));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert!(matches!(lexer.next_token(), Err(Error::UnexpectedEof)));
     }
 
     #[test]
