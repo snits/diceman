@@ -500,27 +500,8 @@ mod tests {
     // --- Marvel simulate API tests ---
 
     use crate::ast::EdgePolicy;
-    use crate::roller::{roll_marvel_with_rng, Rng};
-
-    /// A deterministic `Rng` for testing that cycles through its value vec.
-    struct TestRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl Rng for TestRng {
-        fn roll(&mut self, _max: u32) -> u32 {
-            let value = self.values[self.index % self.values.len()];
-            self.index += 1;
-            value
-        }
-    }
+    use crate::roller::roll_marvel_with_rng;
+    use crate::test_support::TestRng;
 
     /// Build a `TestRng` that cycles through all 216 ordered Marvel triples
     /// (3 RNG draws per trial, 216 trials).
@@ -625,28 +606,8 @@ mod tests {
 mod serde_tests {
     use super::{MarvelSimResult, SimResult};
     use crate::ast::{EdgePolicy, Fantastic};
-    use crate::roller::Rng;
+    use crate::test_support::TestRng;
     use std::collections::HashMap;
-
-    /// A deterministic `Rng` for testing that cycles through its value vec.
-    struct TestRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl Rng for TestRng {
-        fn roll(&mut self, _max: u32) -> u32 {
-            let value = self.values[self.index % self.values.len()];
-            self.index += 1;
-            value
-        }
-    }
 
     #[test]
     fn sim_result_serializes_to_json() {

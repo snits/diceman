@@ -843,6 +843,7 @@ impl<R: Rng> Evaluator<'_, R> {
 mod tests {
     use super::*;
     use crate::ast::DicePool;
+    use crate::test_support::TestRng;
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
@@ -855,26 +856,6 @@ mod tests {
             scoring: ScoringMode::DigitConcatenate,
             annotation_rules: vec![],
         })
-    }
-
-    /// A deterministic RNG for testing.
-    struct TestRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl Rng for TestRng {
-        fn roll(&mut self, _max: u32) -> u32 {
-            let value = self.values[self.index % self.values.len()];
-            self.index += 1;
-            value
-        }
     }
 
     #[test]
