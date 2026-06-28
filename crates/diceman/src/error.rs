@@ -43,6 +43,9 @@ pub enum Error {
 
     #[error("Invalid Marvel roll: {0}")]
     InvalidMarvelRoll(String),
+
+    #[error("{0} count must be at least 1")]
+    ZeroMarvelCount(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

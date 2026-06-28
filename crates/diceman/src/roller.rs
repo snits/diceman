@@ -10,7 +10,7 @@ use crate::format;
 
 /// Maximum number of explosions/rerolls allowed to prevent infinite loops.
 const MAX_EXPLOSIONS: u32 = 100;
-const MAX_REROLLS: u32 = 100;
+pub(crate) const MAX_REROLLS: u32 = 100;
 
 /// Trait for random number generation, allowing for testing with fixed values.
 pub trait Rng {
@@ -346,6 +346,23 @@ impl<R: Rng> Evaluator<'_, R> {
             .collect()
     }
 
+    /// Canonical application phase for a modifier: reroll (0), explode (1),
+    /// then keep/drop (2). Edge/Trouble are consumed by the Marvel pre-pass
+    /// and never reach this ordering.
+    fn modifier_phase(modifier: &RollModifier) -> u8 {
+        match modifier {
+            RollModifier::Reroll { .. } => 0,
+            RollModifier::Explode { .. } => 1,
+            RollModifier::KeepHighest(_)
+            | RollModifier::KeepLowest(_)
+            | RollModifier::DropHighest(_)
+            | RollModifier::DropLowest(_) => 2,
+            RollModifier::Edge { .. } | RollModifier::Trouble { .. } => {
+                unreachable!("Edge/Trouble are handled by the Marvel pre-pass")
+            }
+        }
+    }
+
     /// Apply modifiers. Marvel Edge/Trouble are normalized and applied as a
     /// pre-pass before the standard reroll -> explode -> keep/drop sequence.
     fn apply_modifiers(
@@ -354,7 +371,7 @@ impl<R: Rng> Evaluator<'_, R> {
         kind: &DieKind,
         modifiers: &[RollModifier],
     ) -> Result<()> {
-        let (marvel, rest): (Vec<&RollModifier>, Vec<&RollModifier>) = modifiers
+        let (marvel, mut rest): (Vec<&RollModifier>, Vec<&RollModifier>) = modifiers
             .iter()
             .partition(|m| matches!(m, RollModifier::Edge { .. } | RollModifier::Trouble { .. }));
 
@@ -366,6 +383,12 @@ impl<R: Rng> Evaluator<'_, R> {
             }
             self.apply_marvel_edge_trouble(dice, &marvel)?;
         }
+
+        // Apply phases in the canonical reroll -> explode -> keep/drop order
+        // regardless of how the modifiers were written in the notation. The
+        // sort is stable, so multiple modifiers within one phase keep their
+        // relative order.
+        rest.sort_by_key(|m| Self::modifier_phase(m));
 
         for modifier in rest {
             match modifier {
@@ -687,13 +710,18 @@ impl<R: Rng> Evaluator<'_, R> {
         };
         let condition = condition.unwrap_or(&default_condition);
 
-        let mut i = 0;
-        while i < dice.len() {
+        // Each originating die owns one explosion chain. New dice from a
+        // non-compounding chain are appended past `original_len` so they are
+        // not treated as fresh originating dice, and `explode_count` bounds the
+        // depth of a single chain (not the total pool size).
+        let original_len = dice.len();
+        for i in 0..original_len {
             if dice[i].dropped {
-                i += 1;
                 continue;
             }
 
+            // The chain continues based on the natural roll, even for
+            // penetrating explosions where the stored face is `natural - 1`.
             let mut current_value = dice[i].face.as_numeric();
             let mut explode_count = 0;
 
@@ -728,13 +756,7 @@ impl<R: Rng> Evaluator<'_, R> {
 
                 current_value = new_value;
                 explode_count += 1;
-
-                // For non-compounding, break so the new die gets checked in the outer loop
-                if !compounding {
-                    break;
-                }
             }
-            i += 1;
         }
 
         Ok(())
@@ -821,6 +843,7 @@ impl<R: Rng> Evaluator<'_, R> {
 mod tests {
     use super::*;
     use crate::ast::DicePool;
+    use crate::test_support::TestRng;
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
@@ -833,26 +856,6 @@ mod tests {
             scoring: ScoringMode::DigitConcatenate,
             annotation_rules: vec![],
         })
-    }
-
-    /// A deterministic RNG for testing.
-    struct TestRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl Rng for TestRng {
-        fn roll(&mut self, _max: u32) -> u32 {
-            let value = self.values[self.index % self.values.len()];
-            self.index += 1;
-            value
-        }
     }
 
     #[test]
@@ -1251,6 +1254,56 @@ mod tests {
     }
 
     #[test]
+    fn test_penetrating_explode_chains_on_natural_roll() {
+        // Penetrating explosions chain on the natural roll, not the stored
+        // (penetrated) face. Non-compounding `!p` and compounding `!!p` must
+        // make the same continue/stop decisions on the same stream, differing
+        // only in how results are grouped.
+        //
+        // Stream [6, 6, 4]: chain through both natural 6s, stop at natural 4.
+        // Added penetrated faces: 6, (6-1)=5, (4-1)=3 -> total 14.
+        let stream = vec![6, 6, 4];
+
+        let standard = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: true,
+                condition: None,
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let mut rng = TestRng::new(stream.clone());
+        let standard_result =
+            evaluate_with_rng(&Expr::Roll(standard), &mut rng).unwrap();
+        assert_eq!(standard_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
+        assert_eq!(standard_result.dice.len(), 3); // separate dice
+
+        let compounding = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: true,
+                penetrating: true,
+                condition: None,
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let mut rng = TestRng::new(stream);
+        let compounding_result =
+            evaluate_with_rng(&Expr::Roll(compounding), &mut rng).unwrap();
+        assert_eq!(compounding_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
+        assert_eq!(compounding_result.dice.len(), 1); // compounded into one die
+    }
+
+    #[test]
     fn test_crit_success_marker_output() {
         let plan = RollPlan {
             pool: DicePool {
@@ -1524,6 +1577,50 @@ mod tests {
         assert_eq!(result.outcome, RollOutcome::Numeric(8));
     }
 
+    #[test]
+    fn test_reroll_keep_phase_order_independent_of_notation() {
+        // Modifier phases apply as reroll -> keep/drop regardless of the order
+        // written in the notation. `4d6kh3r` and `4d6rkh3` must compute the
+        // same result on the same RNG stream.
+        let stream = vec![1, 2, 3, 4, 6];
+
+        let written_keep_first = crate::parse("4d6kh3r").unwrap();
+        let mut rng = TestRng::new(stream.clone());
+        let keep_first = evaluate_with_rng(&written_keep_first, &mut rng).unwrap();
+
+        let written_reroll_first = crate::parse("4d6rkh3").unwrap();
+        let mut rng = TestRng::new(stream);
+        let reroll_first = evaluate_with_rng(&written_reroll_first, &mut rng).unwrap();
+
+        assert_eq!(keep_first.outcome, reroll_first.outcome);
+        let kept_keep_first: Vec<i64> = keep_first
+            .dice
+            .iter()
+            .filter(|d| !d.dropped)
+            .map(|d| d.face.as_numeric())
+            .collect();
+        let kept_reroll_first: Vec<i64> = reroll_first
+            .dice
+            .iter()
+            .filter(|d| !d.dropped)
+            .map(|d| d.face.as_numeric())
+            .collect();
+        assert_eq!(kept_keep_first, kept_reroll_first);
+    }
+
+    #[test]
+    fn test_low_die_rerolled_before_keep_highest_drops_it() {
+        // A die low enough that keep-highest would drop it must still be
+        // rerolled first. Stream [1, 2, 3, 4] then 6 as the reroll: the 1 is
+        // rerolled to 6, then keep-highest-3 drops the 2. Total = 6 + 3 + 4.
+        // Applying keep first would drop the 1 and the reroll would skip it,
+        // yielding 2 + 3 + 4 = 9.
+        let expr = crate::parse("4d6kh3r").unwrap();
+        let mut rng = TestRng::new(vec![1, 2, 3, 4, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(13));
+    }
+
     // --- Error path tests ---
 
     #[test]
@@ -1687,6 +1784,60 @@ mod tests {
         let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
         let result = evaluate_with_rng(&expr, &mut rng);
         assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
+
+    #[test]
+    fn test_standard_explode_limit() {
+        // 1d6! (non-compounding) with TestRng always returning 6 must hit the
+        // explode limit rather than growing the pool without bound.
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                condition: None, // defaults to =max (6)
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
+
+    #[test]
+    fn test_wide_pool_single_explosions_do_not_trip_limit() {
+        // The explode limit bounds the depth of a single chain, not the total
+        // pool size. A wide pool where many independent dice each explode once
+        // must not trip the limit, even when the number of explosions exceeds
+        // MAX_EXPLOSIONS.
+        let count = (MAX_EXPLOSIONS as usize) + 20;
+        let plan = RollPlan {
+            pool: DicePool {
+                count: count as u32,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                condition: None, // defaults to =max (6)
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let expr = Expr::Roll(plan);
+        // Initial rolls (all 6, every die explodes) then one stopping roll per
+        // die (all 1, every chain has depth 1).
+        let mut values = vec![6; count];
+        values.extend(std::iter::repeat_n(1, count));
+        let mut rng = TestRng::new(values);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        // Each originating die plus its single exploded die.
+        assert_eq!(result.dice.len(), count * 2);
     }
 
     // --- Marvel Multiverse scoring tests ---
@@ -2283,14 +2434,14 @@ mod tests {
     #[test]
     fn marvel_edge_count_over_limit_errors() {
         let mut rng = TestRng::new(vec![1, 1, 1]);
-        let result = evaluate_with_rng(&crate::parse("3dMarvele200").unwrap(), &mut rng);
+        let result = roll_marvel_with_rng(200, 0, 0, 0, EdgePolicy::RerollLowest, &mut rng);
         assert!(matches!(result, Err(Error::RerollLimit(_))));
     }
 
     #[test]
     fn marvel_trouble_count_over_limit_errors() {
         let mut rng = TestRng::new(vec![1, 1, 1]);
-        let result = evaluate_with_rng(&crate::parse("3dMarvelt200").unwrap(), &mut rng);
+        let result = roll_marvel_with_rng(0, 200, 0, 0, EdgePolicy::RerollLowest, &mut rng);
         assert!(matches!(result, Err(Error::RerollLimit(_))));
     }
 
