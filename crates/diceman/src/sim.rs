@@ -122,16 +122,16 @@ fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResu
     let parsed = parser::parse(expr)?;
 
     let mut distribution: HashMap<i64, usize> = HashMap::new();
-    let mut sum: i64 = 0;
-    let mut sum_sq: i64 = 0;
+    let mut sum: i128 = 0;
+    let mut sum_sq: i128 = 0;
     let mut min = i64::MAX;
     let mut max = i64::MIN;
 
     for _ in 0..n {
         let total = evaluate_total(&parsed, rng)?;
         *distribution.entry(total).or_insert(0) += 1;
-        sum += total;
-        sum_sq += total * total;
+        sum += total as i128;
+        sum_sq += (total as i128) * (total as i128);
         min = min.min(total);
         max = max.max(total);
     }
@@ -153,15 +153,17 @@ fn validate_trial_count(n: usize) -> Result<()> {
 /// `simulate_marvel_with_rng` so both use identical statistics math.
 fn finalize_sim_result(
     distribution: HashMap<i64, usize>,
-    sum: i64,
-    sum_sq: i64,
+    sum: i128,
+    sum_sq: i128,
     min: i64,
     max: i64,
     n: usize,
 ) -> SimResult {
     let mean = sum as f64 / n as f64;
     let variance = (sum_sq as f64 / n as f64) - (mean * mean);
-    let std_dev = variance.sqrt();
+    // Population variance is never negative; clamp to guard against f64 rounding
+    // (catastrophic cancellation) producing a tiny negative that would `sqrt` to NaN.
+    let std_dev = variance.max(0.0).sqrt();
 
     SimResult {
         distribution,
@@ -221,8 +223,8 @@ pub(crate) fn simulate_marvel_with_rng(
     let expr = Expr::Roll(plan);
 
     let mut distribution: HashMap<i64, usize> = HashMap::new();
-    let mut sum: i64 = 0;
-    let mut sum_sq: i64 = 0;
+    let mut sum: i128 = 0;
+    let mut sum_sq: i128 = 0;
     let mut min = i64::MAX;
     let mut max = i64::MIN;
     let mut success_count = 0usize;
@@ -256,8 +258,8 @@ pub(crate) fn simulate_marvel_with_rng(
         if o.auto_fail {
             auto_fail_count += 1;
         }
-        sum += o.total;
-        sum_sq += o.total * o.total;
+        sum += o.total as i128;
+        sum_sq += (o.total as i128) * (o.total as i128);
         min = min.min(o.total);
         max = max.max(o.total);
         *distribution.entry(o.total).or_insert(0) += 1;
@@ -353,6 +355,42 @@ mod tests {
         assert_eq!(result.std_dev, 0.0);
         assert_eq!(result.distribution.len(), 1);
         assert_eq!(result.distribution[&5], 100);
+    }
+
+    #[test]
+    fn simulate_large_total_does_not_overflow_sum_sq() {
+        // A single constant trial whose square exceeds i64::MAX but fits in
+        // i128: 4_000_000_000² = 1.6e19 > i64::MAX (~9.22e18). The accumulator
+        // must hold the squared total without overflowing.
+        let total = 4_000_000_000i64;
+        let result = simulate("4000000000", 1).unwrap();
+
+        assert_eq!(result.min, total);
+        assert_eq!(result.max, total);
+        assert_eq!(result.mean, total as f64);
+        // Constant expression: population variance is exactly zero.
+        assert_eq!(result.std_dev, 0.0);
+    }
+
+    #[test]
+    fn finalize_sim_result_constant_large_n_has_zero_std_dev() {
+        // A constant distribution has zero variance. With a large trial count the
+        // raw accumulators push `sum_sq as f64` past 2^53, so the textbook
+        // `sum_sq/n - mean²` suffers catastrophic cancellation and lands on a
+        // tiny NEGATIVE value. `sqrt` of a negative is NaN, which must never reach
+        // `std_dev`. Values from a constant `c = 67911` over `n = 1_000_000_000`.
+        let c: i128 = 67911;
+        let n: usize = 1_000_000_000;
+        let sum = c * n as i128;
+        let sum_sq = c * c * n as i128;
+
+        let result = finalize_sim_result(HashMap::new(), sum, sum_sq, c as i64, c as i64, n);
+
+        assert!(
+            !result.std_dev.is_nan(),
+            "std_dev must not be NaN for a constant distribution"
+        );
+        assert_eq!(result.std_dev, 0.0);
     }
 
     #[test]
@@ -462,27 +500,8 @@ mod tests {
     // --- Marvel simulate API tests ---
 
     use crate::ast::EdgePolicy;
-    use crate::roller::{roll_marvel_with_rng, Rng};
-
-    /// A deterministic `Rng` for testing that cycles through its value vec.
-    struct TestRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl Rng for TestRng {
-        fn roll(&mut self, _max: u32) -> u32 {
-            let value = self.values[self.index % self.values.len()];
-            self.index += 1;
-            value
-        }
-    }
+    use crate::roller::roll_marvel_with_rng;
+    use crate::test_support::TestRng;
 
     /// Build a `TestRng` that cycles through all 216 ordered Marvel triples
     /// (3 RNG draws per trial, 216 trials).
@@ -587,28 +606,8 @@ mod tests {
 mod serde_tests {
     use super::{MarvelSimResult, SimResult};
     use crate::ast::{EdgePolicy, Fantastic};
-    use crate::roller::Rng;
+    use crate::test_support::TestRng;
     use std::collections::HashMap;
-
-    /// A deterministic `Rng` for testing that cycles through its value vec.
-    struct TestRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl Rng for TestRng {
-        fn roll(&mut self, _max: u32) -> u32 {
-            let value = self.values[self.index % self.values.len()];
-            self.index += 1;
-            value
-        }
-    }
 
     #[test]
     fn sim_result_serializes_to_json() {

@@ -124,19 +124,18 @@ pub fn parse(input: &str) -> Result<Expr> {
     parser::parse(input)
 }
 
+/// Deterministic RNG for tests that cycles through a fixed list of values.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ast::RollOutcome;
+pub(crate) mod test_support {
+    use crate::roller::Rng;
 
-    /// Deterministic RNG for testing with pre-defined values.
-    struct TestRng {
+    pub(crate) struct TestRng {
         values: Vec<u32>,
         index: usize,
     }
 
     impl TestRng {
-        fn new(values: Vec<u32>) -> Self {
+        pub(crate) fn new(values: Vec<u32>) -> Self {
             Self { values, index: 0 }
         }
     }
@@ -148,6 +147,13 @@ mod tests {
             value
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::RollOutcome;
+    use crate::test_support::TestRng;
 
     #[test]
     fn test_roll_basic() {

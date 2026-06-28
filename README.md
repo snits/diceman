@@ -114,7 +114,7 @@ All explode modifiers support conditions:
 **Examples:**
 - `1d6!` - Standard exploding d6 (Roll20 style)
 - `1d6!!` - Compounding/Shadowrun style (6+6+4 = 16 shown as [16])
-- `1d6!p` - HackMaster penetrating (6+5+3 shown as [6, 4, 2])
+- `1d6!p` - HackMaster penetrating (natural [6, 6, 4] shown as [6, 5, 3] = 14)
 - `1d10!>=8` - Explode on 8, 9, or 10
 
 ### Reroll
