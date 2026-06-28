@@ -161,7 +161,9 @@ fn finalize_sim_result(
 ) -> SimResult {
     let mean = sum as f64 / n as f64;
     let variance = (sum_sq as f64 / n as f64) - (mean * mean);
-    let std_dev = variance.sqrt();
+    // Population variance is never negative; clamp to guard against f64 rounding
+    // (catastrophic cancellation) producing a tiny negative that would `sqrt` to NaN.
+    let std_dev = variance.max(0.0).sqrt();
 
     SimResult {
         distribution,
@@ -367,6 +369,27 @@ mod tests {
         assert_eq!(result.max, total);
         assert_eq!(result.mean, total as f64);
         // Constant expression: population variance is exactly zero.
+        assert_eq!(result.std_dev, 0.0);
+    }
+
+    #[test]
+    fn finalize_sim_result_constant_large_n_has_zero_std_dev() {
+        // A constant distribution has zero variance. With a large trial count the
+        // raw accumulators push `sum_sq as f64` past 2^53, so the textbook
+        // `sum_sq/n - mean²` suffers catastrophic cancellation and lands on a
+        // tiny NEGATIVE value. `sqrt` of a negative is NaN, which must never reach
+        // `std_dev`. Values from a constant `c = 67911` over `n = 1_000_000_000`.
+        let c: i128 = 67911;
+        let n: usize = 1_000_000_000;
+        let sum = c * n as i128;
+        let sum_sq = c * c * n as i128;
+
+        let result = finalize_sim_result(HashMap::new(), sum, sum_sq, c as i64, c as i64, n);
+
+        assert!(
+            !result.std_dev.is_nan(),
+            "std_dev must not be NaN for a constant distribution"
+        );
         assert_eq!(result.std_dev, 0.0);
     }
 
