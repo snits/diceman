@@ -10,7 +10,7 @@ use crate::format;
 
 /// Maximum number of explosions/rerolls allowed to prevent infinite loops.
 const MAX_EXPLOSIONS: u32 = 100;
-const MAX_REROLLS: u32 = 100;
+pub(crate) const MAX_REROLLS: u32 = 100;
 
 /// Trait for random number generation, allowing for testing with fixed values.
 pub trait Rng {
@@ -2453,14 +2453,14 @@ mod tests {
     #[test]
     fn marvel_edge_count_over_limit_errors() {
         let mut rng = TestRng::new(vec![1, 1, 1]);
-        let result = evaluate_with_rng(&crate::parse("3dMarvele200").unwrap(), &mut rng);
+        let result = roll_marvel_with_rng(200, 0, 0, 0, EdgePolicy::RerollLowest, &mut rng);
         assert!(matches!(result, Err(Error::RerollLimit(_))));
     }
 
     #[test]
     fn marvel_trouble_count_over_limit_errors() {
         let mut rng = TestRng::new(vec![1, 1, 1]);
-        let result = evaluate_with_rng(&crate::parse("3dMarvelt200").unwrap(), &mut rng);
+        let result = roll_marvel_with_rng(0, 200, 0, 0, EdgePolicy::RerollLowest, &mut rng);
         assert!(matches!(result, Err(Error::RerollLimit(_))));
     }
 

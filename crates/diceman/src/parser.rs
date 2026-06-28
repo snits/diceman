@@ -7,6 +7,7 @@ use crate::ast::{
 };
 use crate::error::{Error, Result};
 use crate::lexer::{Lexer, Token};
+use crate::roller::MAX_REROLLS;
 
 /// Parser for dice notation expressions.
 pub struct Parser<'a> {
@@ -437,7 +438,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a Marvel Edge modifier (e, e2). Notation always produces RerollLowest.
     fn edge_modifier(&mut self) -> Result<RollModifier> {
-        let count = self.optional_number(1)?;
+        let count = self.marvel_count("edge")?;
         Ok(RollModifier::Edge {
             count,
             policy: EdgePolicy::RerollLowest,
@@ -446,8 +447,23 @@ impl<'a> Parser<'a> {
 
     /// Parse a Marvel Trouble modifier (t, t2).
     fn trouble_modifier(&mut self) -> Result<RollModifier> {
-        let count = self.optional_number(1)?;
+        let count = self.marvel_count("trouble")?;
         Ok(RollModifier::Trouble { count })
+    }
+
+    /// Parse a Marvel Edge/Trouble count, defaulting to 1 when omitted.
+    ///
+    /// An explicit 0 is rejected (the user wrote a no-op), and counts beyond the
+    /// reroll limit the roller can execute are rejected as well.
+    fn marvel_count(&mut self, label: &'static str) -> Result<u32> {
+        let count = self.optional_number(1)?;
+        if count == 0 {
+            return Err(Error::ZeroMarvelCount(label));
+        }
+        if count > MAX_REROLLS {
+            return Err(Error::RerollLimit(MAX_REROLLS));
+        }
+        Ok(count)
     }
 
     /// Parse an optional number, returning default if not present.
@@ -1121,6 +1137,41 @@ mod tests {
                 "{input} should be rejected with InvalidMarvelRoll, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_parse_marvel_edge_zero_rejected() {
+        let err = parse("3dMarvele0").unwrap_err();
+        assert!(
+            matches!(err, Error::ZeroMarvelCount(_)),
+            "3dMarvele0 should be rejected, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_marvel_trouble_zero_rejected() {
+        let err = parse("3dMarvelt0").unwrap_err();
+        assert!(
+            matches!(err, Error::ZeroMarvelCount(_)),
+            "3dMarvelt0 should be rejected, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_marvel_count_over_limit_rejected() {
+        for input in ["3dMarvele101", "3dMarvelt101"] {
+            let err = parse(input).unwrap_err();
+            assert!(
+                matches!(err, Error::RerollLimit(_)),
+                "{input} should be rejected with RerollLimit, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_marvel_count_at_limit_accepted() {
+        assert!(parse("3dMarvele100").is_ok());
+        assert!(parse("3dMarvelt100").is_ok());
     }
 
     #[test]
