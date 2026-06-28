@@ -687,13 +687,18 @@ impl<R: Rng> Evaluator<'_, R> {
         };
         let condition = condition.unwrap_or(&default_condition);
 
-        let mut i = 0;
-        while i < dice.len() {
+        // Each originating die owns one explosion chain. New dice from a
+        // non-compounding chain are appended past `original_len` so they are
+        // not treated as fresh originating dice, and `explode_count` bounds the
+        // depth of a single chain (not the total pool size).
+        let original_len = dice.len();
+        for i in 0..original_len {
             if dice[i].dropped {
-                i += 1;
                 continue;
             }
 
+            // The chain continues based on the natural roll, even for
+            // penetrating explosions where the stored face is `natural - 1`.
             let mut current_value = dice[i].face.as_numeric();
             let mut explode_count = 0;
 
@@ -728,13 +733,7 @@ impl<R: Rng> Evaluator<'_, R> {
 
                 current_value = new_value;
                 explode_count += 1;
-
-                // For non-compounding, break so the new die gets checked in the outer loop
-                if !compounding {
-                    break;
-                }
             }
-            i += 1;
         }
 
         Ok(())
@@ -1251,6 +1250,56 @@ mod tests {
     }
 
     #[test]
+    fn test_penetrating_explode_chains_on_natural_roll() {
+        // Penetrating explosions chain on the natural roll, not the stored
+        // (penetrated) face. Non-compounding `!p` and compounding `!!p` must
+        // make the same continue/stop decisions on the same stream, differing
+        // only in how results are grouped.
+        //
+        // Stream [6, 6, 4]: chain through both natural 6s, stop at natural 4.
+        // Added penetrated faces: 6, (6-1)=5, (4-1)=3 -> total 14.
+        let stream = vec![6, 6, 4];
+
+        let standard = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: true,
+                condition: None,
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let mut rng = TestRng::new(stream.clone());
+        let standard_result =
+            evaluate_with_rng(&Expr::Roll(standard), &mut rng).unwrap();
+        assert_eq!(standard_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
+        assert_eq!(standard_result.dice.len(), 3); // separate dice
+
+        let compounding = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: true,
+                penetrating: true,
+                condition: None,
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let mut rng = TestRng::new(stream);
+        let compounding_result =
+            evaluate_with_rng(&Expr::Roll(compounding), &mut rng).unwrap();
+        assert_eq!(compounding_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
+        assert_eq!(compounding_result.dice.len(), 1); // compounded into one die
+    }
+
+    #[test]
     fn test_crit_success_marker_output() {
         let plan = RollPlan {
             pool: DicePool {
@@ -1687,6 +1736,60 @@ mod tests {
         let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
         let result = evaluate_with_rng(&expr, &mut rng);
         assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
+
+    #[test]
+    fn test_standard_explode_limit() {
+        // 1d6! (non-compounding) with TestRng always returning 6 must hit the
+        // explode limit rather than growing the pool without bound.
+        let plan = RollPlan {
+            pool: DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                condition: None, // defaults to =max (6)
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
+
+    #[test]
+    fn test_wide_pool_single_explosions_do_not_trip_limit() {
+        // The explode limit bounds the depth of a single chain, not the total
+        // pool size. A wide pool where many independent dice each explode once
+        // must not trip the limit, even when the number of explosions exceeds
+        // MAX_EXPLOSIONS.
+        let count = (MAX_EXPLOSIONS as usize) + 20;
+        let plan = RollPlan {
+            pool: DicePool {
+                count: count as u32,
+                kind: DieKind::Number(6),
+            },
+            modifiers: vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                condition: None, // defaults to =max (6)
+            }],
+            scoring: ScoringMode::Sum,
+            annotation_rules: vec![],
+        };
+        let expr = Expr::Roll(plan);
+        // Initial rolls (all 6, every die explodes) then one stopping roll per
+        // die (all 1, every chain has depth 1).
+        let mut values = vec![6; count];
+        values.extend(std::iter::repeat_n(1, count));
+        let mut rng = TestRng::new(values);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        // Each originating die plus its single exploded die.
+        assert_eq!(result.dice.len(), count * 2);
     }
 
     // --- Marvel Multiverse scoring tests ---
