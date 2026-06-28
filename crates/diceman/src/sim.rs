@@ -122,16 +122,16 @@ fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResu
     let parsed = parser::parse(expr)?;
 
     let mut distribution: HashMap<i64, usize> = HashMap::new();
-    let mut sum: i64 = 0;
-    let mut sum_sq: i64 = 0;
+    let mut sum: i128 = 0;
+    let mut sum_sq: i128 = 0;
     let mut min = i64::MAX;
     let mut max = i64::MIN;
 
     for _ in 0..n {
         let total = evaluate_total(&parsed, rng)?;
         *distribution.entry(total).or_insert(0) += 1;
-        sum += total;
-        sum_sq += total * total;
+        sum += total as i128;
+        sum_sq += (total as i128) * (total as i128);
         min = min.min(total);
         max = max.max(total);
     }
@@ -153,8 +153,8 @@ fn validate_trial_count(n: usize) -> Result<()> {
 /// `simulate_marvel_with_rng` so both use identical statistics math.
 fn finalize_sim_result(
     distribution: HashMap<i64, usize>,
-    sum: i64,
-    sum_sq: i64,
+    sum: i128,
+    sum_sq: i128,
     min: i64,
     max: i64,
     n: usize,
@@ -221,8 +221,8 @@ pub(crate) fn simulate_marvel_with_rng(
     let expr = Expr::Roll(plan);
 
     let mut distribution: HashMap<i64, usize> = HashMap::new();
-    let mut sum: i64 = 0;
-    let mut sum_sq: i64 = 0;
+    let mut sum: i128 = 0;
+    let mut sum_sq: i128 = 0;
     let mut min = i64::MAX;
     let mut max = i64::MIN;
     let mut success_count = 0usize;
@@ -256,8 +256,8 @@ pub(crate) fn simulate_marvel_with_rng(
         if o.auto_fail {
             auto_fail_count += 1;
         }
-        sum += o.total;
-        sum_sq += o.total * o.total;
+        sum += o.total as i128;
+        sum_sq += (o.total as i128) * (o.total as i128);
         min = min.min(o.total);
         max = max.max(o.total);
         *distribution.entry(o.total).or_insert(0) += 1;
@@ -353,6 +353,21 @@ mod tests {
         assert_eq!(result.std_dev, 0.0);
         assert_eq!(result.distribution.len(), 1);
         assert_eq!(result.distribution[&5], 100);
+    }
+
+    #[test]
+    fn simulate_large_total_does_not_overflow_sum_sq() {
+        // A single constant trial whose square exceeds i64::MAX but fits in
+        // i128: 4_000_000_000² = 1.6e19 > i64::MAX (~9.22e18). The accumulator
+        // must hold the squared total without overflowing.
+        let total = 4_000_000_000i64;
+        let result = simulate("4000000000", 1).unwrap();
+
+        assert_eq!(result.min, total);
+        assert_eq!(result.max, total);
+        assert_eq!(result.mean, total as f64);
+        // Constant expression: population variance is exactly zero.
+        assert_eq!(result.std_dev, 0.0);
     }
 
     #[test]
