@@ -1278,8 +1278,7 @@ mod tests {
             annotation_rules: vec![],
         };
         let mut rng = TestRng::new(stream.clone());
-        let standard_result =
-            evaluate_with_rng(&Expr::Roll(standard), &mut rng).unwrap();
+        let standard_result = evaluate_with_rng(&Expr::Roll(standard), &mut rng).unwrap();
         assert_eq!(standard_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
         assert_eq!(standard_result.dice.len(), 3); // separate dice
 
@@ -1297,8 +1296,7 @@ mod tests {
             annotation_rules: vec![],
         };
         let mut rng = TestRng::new(stream);
-        let compounding_result =
-            evaluate_with_rng(&Expr::Roll(compounding), &mut rng).unwrap();
+        let compounding_result = evaluate_with_rng(&Expr::Roll(compounding), &mut rng).unwrap();
         assert_eq!(compounding_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
         assert_eq!(compounding_result.dice.len(), 1); // compounded into one die
     }
