@@ -46,6 +46,9 @@ pub enum Error {
 
     #[error("{0} count must be at least 1")]
     ZeroMarvelCount(&'static str),
+
+    #[error("dice result is not numeric and cannot be used in arithmetic")]
+    NonNumericOutcome,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

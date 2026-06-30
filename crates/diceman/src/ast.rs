@@ -173,14 +173,16 @@ pub struct MarvelOutcome {
 }
 
 impl RollOutcome {
-    /// Return the numeric value of the outcome.
+    /// Return the numeric value of the outcome, if it has one.
     ///
-    /// For `Successes` this is the count; for `Marvel` this is the total
-    /// (lenient extraction consistent with arithmetic coercion).
-    pub fn as_numeric(self) -> i64 {
+    /// `Some` for variants with a numeric value: `Successes` yields the
+    /// count, `Marvel` yields the total (lenient extraction consistent with
+    /// arithmetic coercion). `None` is reserved for future non-numeric
+    /// (e.g. symbolic) outcomes that have no arithmetic meaning.
+    pub fn as_numeric(self) -> Option<i64> {
         match self {
-            RollOutcome::Numeric(n) | RollOutcome::Successes(n) => n,
-            RollOutcome::Marvel(o) => o.total,
+            RollOutcome::Numeric(n) | RollOutcome::Successes(n) => Some(n),
+            RollOutcome::Marvel(o) => Some(o.total),
         }
     }
 }
