@@ -22,7 +22,9 @@ pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutc
     match outcome {
         RollOutcome::Marvel(marvel) => format_marvel_roll(plan, dice, marvel),
         _ => {
-            let total = outcome.as_numeric();
+            let total = outcome.as_numeric().expect(
+                "Sum/CountSuccesses/DigitConcatenate scoring always yields a numeric outcome",
+            );
             match plan.scoring {
                 ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
                 ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
