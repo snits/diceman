@@ -122,7 +122,13 @@ pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
         rng,
         total_only: true,
     };
-    Ok(evaluator.evaluate(expr)?.outcome.as_numeric())
+    // Every current RollOutcome variant is numeric, so this `ok_or` is
+    // unreachable until a symbolic outcome lands (Phase 9, bead diceman-dqh).
+    evaluator
+        .evaluate(expr)?
+        .outcome
+        .as_numeric()
+        .ok_or(Error::NonNumericOutcome)
 }
 
 /// Evaluate a dice expression and return the full `RollOutcome` without
@@ -264,8 +270,17 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::BinOp { op, left, right } => {
                 let left_result = self.evaluate(left)?;
                 let right_result = self.evaluate(right)?;
-                let left = left_result.outcome.as_numeric();
-                let right = right_result.outcome.as_numeric();
+                // Every current RollOutcome variant is numeric, so these
+                // `ok_or` calls are unreachable until a symbolic outcome
+                // lands (Phase 9, bead diceman-dqh).
+                let left = left_result
+                    .outcome
+                    .as_numeric()
+                    .ok_or(Error::NonNumericOutcome)?;
+                let right = right_result
+                    .outcome
+                    .as_numeric()
+                    .ok_or(Error::NonNumericOutcome)?;
                 let total = match op {
                     Op::Add => left + right,
                     Op::Sub => left - right,
@@ -1278,8 +1293,7 @@ mod tests {
             annotation_rules: vec![],
         };
         let mut rng = TestRng::new(stream.clone());
-        let standard_result =
-            evaluate_with_rng(&Expr::Roll(standard), &mut rng).unwrap();
+        let standard_result = evaluate_with_rng(&Expr::Roll(standard), &mut rng).unwrap();
         assert_eq!(standard_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
         assert_eq!(standard_result.dice.len(), 3); // separate dice
 
@@ -1297,8 +1311,7 @@ mod tests {
             annotation_rules: vec![],
         };
         let mut rng = TestRng::new(stream);
-        let compounding_result =
-            evaluate_with_rng(&Expr::Roll(compounding), &mut rng).unwrap();
+        let compounding_result = evaluate_with_rng(&Expr::Roll(compounding), &mut rng).unwrap();
         assert_eq!(compounding_result.outcome, RollOutcome::Numeric(14)); // 6 + 5 + 3
         assert_eq!(compounding_result.dice.len(), 1); // compounded into one die
     }
@@ -1997,7 +2010,7 @@ mod tests {
             auto_fail: false,
             m_shown: true,
         });
-        assert_eq!(o.as_numeric(), 7);
+        assert_eq!(o.as_numeric(), Some(7));
     }
 
     #[test]
@@ -2331,7 +2344,7 @@ mod tests {
         if pos == len {
             let mut rng = TestRng::new(sequence.clone());
             let result = evaluate_with_rng(expr, &mut rng).unwrap();
-            *sum += result.outcome.as_numeric();
+            *sum += result.outcome.as_numeric().unwrap();
             return;
         }
         for v in 1..=6u32 {
