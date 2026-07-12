@@ -4,6 +4,7 @@
 use crate::ast::{
     Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
     Fantastic, MarvelCheck, MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
+    Symbol, SymbolPool,
 };
 use crate::error::{Error, Result};
 use crate::format;
@@ -11,6 +12,36 @@ use crate::format;
 /// Maximum number of explosions/rerolls allowed to prevent infinite loops.
 const MAX_EXPLOSIONS: u32 = 100;
 pub(crate) const MAX_REROLLS: u32 = 100;
+
+/// Build the face a Marvel die shows for a raw roll at a given pool index.
+///
+/// The middle die (index 1) of a 3dMarvel pool is the Marvel die: a raw 1
+/// there is the M face (`Symbols` containing `Symbol::Marvel`). Every other
+/// die and value is a plain `Numeric` face. Shared by pool rolling and every
+/// Edge/Trouble reroll so a rerolled natural 1 on the middle die becomes M in
+/// both `.face` and `.history`.
+pub(crate) fn marvel_face(index: usize, raw: i64) -> DieFace {
+    if index == 1 && raw == 1 {
+        DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
+    } else {
+        DieFace::Numeric(raw)
+    }
+}
+
+/// True when a face is the Marvel M face (a symbol face containing `Marvel`).
+fn is_marvel_face(face: DieFace) -> bool {
+    matches!(face, DieFace::Symbols(pool) if pool.contains(Symbol::Marvel))
+}
+
+/// Marvel rank of a face: the M face ranks 7 (above 6); numeric faces rank by
+/// value. Only Marvel-pool faces reach here (`Numeric` or the M face).
+fn rank(face: DieFace) -> i64 {
+    match face {
+        DieFace::Numeric(n) => n,
+        DieFace::Symbols(pool) if pool.contains(Symbol::Marvel) => 7,
+        DieFace::Symbols(_) => unreachable!("non-Marvel symbol face in a Marvel pool"),
+    }
+}
 
 /// Trait for random number generation, allowing for testing with fixed values.
 pub trait Rng {
@@ -122,8 +153,6 @@ pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
         rng,
         total_only: true,
     };
-    // Every current RollOutcome variant is numeric, so this `ok_or` is
-    // unreachable until a symbolic outcome lands (Phase 9, bead diceman-dqh).
     evaluator
         .evaluate(expr)?
         .outcome
@@ -213,7 +242,7 @@ pub fn roll_marvel_with_rng(
     let result = evaluate_with_rng(&expr, rng)?;
     let outcome = match result.outcome {
         RollOutcome::Marvel(o) => o,
-        RollOutcome::Numeric(_) | RollOutcome::Successes(_) => {
+        RollOutcome::Numeric(_) | RollOutcome::Successes(_) | RollOutcome::Symbols(_) => {
             return Err(Error::InvalidMarvelRoll(
                 "Marvel plan produced a non-Marvel outcome".to_string(),
             ));
@@ -270,9 +299,6 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::BinOp { op, left, right } => {
                 let left_result = self.evaluate(left)?;
                 let right_result = self.evaluate(right)?;
-                // Every current RollOutcome variant is numeric, so these
-                // `ok_or` calls are unreachable until a symbolic outcome
-                // lands (Phase 9, bead diceman-dqh).
                 let left = left_result
                     .outcome
                     .as_numeric()
@@ -324,9 +350,9 @@ impl<R: Rng> Evaluator<'_, R> {
     }
 
     fn evaluate_roll(&mut self, plan: &RollPlan) -> Result<RollResult> {
-        // Pipeline: roll_pool -> apply_modifiers -> score -> apply_annotations -> format
-        let mut dice = self.roll_pool(plan.pool());
-        self.apply_modifiers(&mut dice, &plan.pool().kind, plan.modifiers())?;
+        // Pipeline: roll_pools -> apply_modifiers -> score -> apply_annotations -> format
+        let mut dice = self.roll_pools(plan.pools());
+        self.apply_modifiers(&mut dice, &plan.pools()[0].kind, plan.modifiers())?;
         let outcome = Self::score(&dice, plan.scoring())?;
 
         let (expression, annotations) = if self.total_only {
@@ -345,14 +371,33 @@ impl<R: Rng> Evaluator<'_, R> {
         })
     }
 
+    /// Roll every pool group in order, concatenating their dice into one
+    /// flat slice that is scored as a unit.
+    fn roll_pools(&mut self, pools: &[DicePool]) -> Vec<DieResult> {
+        let mut dice = Vec::new();
+        for pool in pools {
+            dice.extend(self.roll_pool(pool));
+        }
+        dice
+    }
+
     /// Roll a fresh pool of dice, one `DieResult` per die in the pool.
     fn roll_pool(&mut self, pool: &DicePool) -> Vec<DieResult> {
         (0..pool.count)
-            .map(|_| {
-                let value = self.roll_die(&pool.kind);
+            .map(|i| {
+                let face = match pool.kind {
+                    DieKind::Narrative(die) => {
+                        let roll = self.rng.roll(die.count());
+                        DieFace::Symbols(die.face(roll))
+                    }
+                    DieKind::MarvelD6 => marvel_face(i as usize, self.roll_die(&pool.kind)),
+                    DieKind::Number(_) | DieKind::Percent | DieKind::Fudge => {
+                        DieFace::Numeric(self.roll_die(&pool.kind))
+                    }
+                };
                 DieResult {
-                    face: DieFace::Numeric(value),
-                    history: vec![DieFace::Numeric(value)],
+                    face,
+                    history: vec![face],
                     dropped: false,
                     is_crit_success: false,
                     is_crit_failure: false,
@@ -474,15 +519,6 @@ impl<R: Rng> Evaluator<'_, R> {
         Ok(())
     }
 
-    /// Marvel rank: the Marvel die (index 1) showing 1 (M) ranks 7, above 6.
-    fn marvel_rank(index: usize, face: i64) -> i64 {
-        if index == 1 && face == 1 {
-            7
-        } else {
-            face
-        }
-    }
-
     /// Apply one or more Edge reroll steps, keeping the better die by rank.
     fn apply_edge(&mut self, dice: &mut [DieResult], count: u32, policy: EdgePolicy) -> Result<()> {
         if count > MAX_REROLLS {
@@ -492,20 +528,20 @@ impl<R: Rng> Evaluator<'_, R> {
             let target = match policy {
                 EdgePolicy::RerollLowest => Self::lowest_rank_index(dice),
                 EdgePolicy::ChaseFantastic => {
-                    if dice.len() > 1 && dice[1].face.as_numeric() != 1 {
+                    if dice.len() > 1 && !is_marvel_face(dice[1].face) {
                         1
                     } else {
                         Self::lowest_rank_index(dice)
                     }
                 }
             };
-            let old_face = dice[target].face.as_numeric();
-            let old_rank = Self::marvel_rank(target, old_face);
-            let new_face = self.roll_die(&DieKind::MarvelD6);
-            let new_rank = Self::marvel_rank(target, new_face);
-            dice[target].history.push(DieFace::Numeric(new_face));
+            let old_rank = rank(dice[target].face);
+            let raw = self.roll_die(&DieKind::MarvelD6);
+            let new_face = marvel_face(target, raw);
+            let new_rank = rank(new_face);
+            dice[target].history.push(new_face);
             if new_rank > old_rank {
-                dice[target].face = DieFace::Numeric(new_face);
+                dice[target].face = new_face;
             }
         }
         Ok(())
@@ -518,13 +554,13 @@ impl<R: Rng> Evaluator<'_, R> {
         }
         for _ in 0..count {
             let target = Self::highest_rank_index(dice);
-            let old_face = dice[target].face.as_numeric();
-            let old_rank = Self::marvel_rank(target, old_face);
-            let new_face = self.roll_die(&DieKind::MarvelD6);
-            let new_rank = Self::marvel_rank(target, new_face);
-            dice[target].history.push(DieFace::Numeric(new_face));
+            let old_rank = rank(dice[target].face);
+            let raw = self.roll_die(&DieKind::MarvelD6);
+            let new_face = marvel_face(target, raw);
+            let new_rank = rank(new_face);
+            dice[target].history.push(new_face);
             if new_rank < old_rank {
-                dice[target].face = DieFace::Numeric(new_face);
+                dice[target].face = new_face;
             }
         }
         Ok(())
@@ -534,7 +570,7 @@ impl<R: Rng> Evaluator<'_, R> {
     fn lowest_rank_index(dice: &[DieResult]) -> usize {
         dice.iter()
             .enumerate()
-            .min_by_key(|(i, d)| Self::marvel_rank(*i, d.face.as_numeric()))
+            .min_by_key(|(_, d)| rank(d.face))
             .map(|(i, _)| i)
             .expect("Marvel pool must be non-empty")
     }
@@ -543,7 +579,7 @@ impl<R: Rng> Evaluator<'_, R> {
     fn highest_rank_index(dice: &[DieResult]) -> usize {
         dice.iter()
             .enumerate()
-            .min_by_key(|(i, d)| std::cmp::Reverse(Self::marvel_rank(*i, d.face.as_numeric())))
+            .min_by_key(|(_, d)| std::cmp::Reverse(rank(d.face)))
             .map(|(i, _)| i)
             .expect("Marvel pool must be non-empty")
     }
@@ -554,7 +590,7 @@ impl<R: Rng> Evaluator<'_, R> {
             ScoringMode::Sum => RollOutcome::Numeric(
                 dice.iter()
                     .filter(|d| !d.dropped)
-                    .map(|d| d.face.as_numeric())
+                    .map(|d| d.face.numeric_value())
                     .sum(),
             ),
             ScoringMode::CountSuccesses(condition) => RollOutcome::Successes(
@@ -563,35 +599,57 @@ impl<R: Rng> Evaluator<'_, R> {
                     .filter(|d| {
                         condition
                             .compare
-                            .check(d.face.as_numeric(), condition.value)
+                            .check(d.face.numeric_value(), condition.value)
                     })
                     .count() as i64,
             ),
             ScoringMode::DigitConcatenate => RollOutcome::Numeric(
                 dice.iter()
                     .filter(|d| !d.dropped)
-                    .fold(0i64, |acc, d| acc * 10 + d.face.as_numeric()),
+                    .fold(0i64, |acc, d| acc * 10 + d.face.numeric_value()),
             ),
+            ScoringMode::SymbolCancel => {
+                let merged = Self::merge_symbol_faces(dice);
+                let s = merged.count(Symbol::Success) as i64;
+                let a = merged.count(Symbol::Advantage) as i64;
+                let tr = merged.count(Symbol::Triumph);
+                let f = merged.count(Symbol::Failure) as i64;
+                let th = merged.count(Symbol::Threat) as i64;
+                let de = merged.count(Symbol::Despair);
+                RollOutcome::Symbols(crate::ast::SymbolsOutcome {
+                    successes: (s + tr as i64) - (f + de as i64),
+                    advantages: a - th,
+                    triumphs: tr,
+                    despairs: de,
+                    light: merged.count(Symbol::Light),
+                    dark: merged.count(Symbol::Dark),
+                })
+            }
             ScoringMode::MarvelMultiverse => {
-                // Contract: 3 dice, index 1 = Marvel die, all DieFace::Numeric.
+                // Contract: 3 dice, index 1 = the Marvel die (its M face is
+                // the only symbol face a Marvel pool can produce); the outer
+                // dice are always numeric.
                 if dice.len() != 3 {
                     return Err(Error::InvalidMarvelRoll(format!(
                         "Marvel Multiverse scoring requires exactly 3 dice, got {}",
                         dice.len()
                     )));
                 }
-                let l = dice[0].face.as_numeric();
-                let m = dice[1].face.as_numeric();
-                let r = dice[2].face.as_numeric();
                 let (m_shown, auto_fail) = Self::marvel_facts(dice);
-                let m_contrib = if m == 1 {
-                    if auto_fail {
-                        1
-                    } else {
-                        6
+                let l = dice[0].face.numeric_value();
+                let r = dice[2].face.numeric_value();
+                let m_contrib = match dice[1].face {
+                    DieFace::Symbols(pool) if pool.contains(Symbol::Marvel) => {
+                        if auto_fail {
+                            1
+                        } else {
+                            6
+                        }
                     }
-                } else {
-                    m
+                    DieFace::Numeric(n) => n,
+                    DieFace::Symbols(_) => {
+                        unreachable!("non-Marvel symbol face on the Marvel die")
+                    }
                 };
                 let total = l + m_contrib + r;
                 RollOutcome::Marvel(crate::ast::MarvelOutcome {
@@ -605,6 +663,21 @@ impl<R: Rng> Evaluator<'_, R> {
         Ok(outcome)
     }
 
+    /// Merge every non-dropped die's symbol face into one pool.
+    ///
+    /// Narrative pools have no drop-producing modifiers, so the `!dropped`
+    /// filter is a no-op there; it mirrors the other scoring arms. Numeric
+    /// faces carry no symbols and contribute nothing.
+    fn merge_symbol_faces(dice: &[DieResult]) -> SymbolPool {
+        let mut merged = SymbolPool::new();
+        for die in dice.iter().filter(|d| !d.dropped) {
+            if let DieFace::Symbols(pool) = die.face {
+                merged.merge(&pool);
+            }
+        }
+        merged
+    }
+
     /// Derive the Marvel Multiverse facts from the dice.
     ///
     /// The Marvel die is the middle die (index 1); its 1 face is M.
@@ -612,17 +685,19 @@ impl<R: Rng> Evaluator<'_, R> {
     /// when the raw roll was `1 / M / 1`. The dice are the source of truth.
     fn marvel_facts(dice: &[DieResult]) -> (bool, bool) {
         debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
-        let l = dice[0].face.as_numeric();
-        let m = dice[1].face.as_numeric();
-        let r = dice[2].face.as_numeric();
-        (m == 1, l == 1 && m == 1 && r == 1)
+        let m_shown = is_marvel_face(dice[1].face);
+        let auto_fail =
+            m_shown && dice[0].face == DieFace::Numeric(1) && dice[2].face == DieFace::Numeric(1);
+        (m_shown, auto_fail)
     }
 
     /// Mark per-die crit annotations and return pool-level annotations.
     ///
     /// For Marvel rolls, pushes `Fantastic` when the middle die showed M
-    /// and `AutoFail` when the roll was raw `1 / M / 1`. The Marvel facts are
-    /// re-derived from the dice (the source of truth), not from the outcome.
+    /// and `AutoFail` when the roll was raw `1 / M / 1`. For narrative
+    /// (`SymbolCancel`) rolls, pushes `Triumph`/`Despair` once each when those
+    /// symbols are present. In both cases the facts are re-derived from the
+    /// dice (the source of truth), not from the outcome.
     fn apply_annotations(
         dice: &mut [DieResult],
         rules: &[AnnotationRule],
@@ -638,26 +713,40 @@ impl<R: Rng> Evaluator<'_, R> {
         });
         for die in dice.iter_mut().filter(|d| !d.dropped) {
             if let Some(c) = success_cond {
-                die.is_crit_success = c.compare.check(die.face.as_numeric(), c.value);
+                die.is_crit_success = c.compare.check(die.face.numeric_value(), c.value);
             }
             if let Some(c) = failure_cond {
-                die.is_crit_failure = c.compare.check(die.face.as_numeric(), c.value);
+                die.is_crit_failure = c.compare.check(die.face.numeric_value(), c.value);
             }
         }
 
-        if let ScoringMode::MarvelMultiverse = scoring {
-            debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
-            let (m_shown, auto_fail) = Self::marvel_facts(dice);
-            let mut annotations = Vec::new();
-            if m_shown {
-                annotations.push(Annotation::Fantastic);
+        match scoring {
+            ScoringMode::MarvelMultiverse => {
+                debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
+                let (m_shown, auto_fail) = Self::marvel_facts(dice);
+                let mut annotations = Vec::new();
+                if m_shown {
+                    annotations.push(Annotation::Fantastic);
+                }
+                if auto_fail {
+                    annotations.push(Annotation::AutoFail);
+                }
+                annotations
             }
-            if auto_fail {
-                annotations.push(Annotation::AutoFail);
+            ScoringMode::SymbolCancel => {
+                let merged = Self::merge_symbol_faces(dice);
+                let mut annotations = Vec::new();
+                if merged.contains(Symbol::Triumph) {
+                    annotations.push(Annotation::Triumph);
+                }
+                if merged.contains(Symbol::Despair) {
+                    annotations.push(Annotation::Despair);
+                }
+                annotations
             }
-            annotations
-        } else {
-            Vec::new()
+            ScoringMode::Sum | ScoringMode::CountSuccesses(_) | ScoringMode::DigitConcatenate => {
+                Vec::new()
+            }
         }
     }
 
@@ -667,6 +756,9 @@ impl<R: Rng> Evaluator<'_, R> {
             DieKind::Percent => self.rng.roll(100) as i64,
             DieKind::Fudge => self.rng.roll(3) as i64 - 2, // -1, 0, 1
             DieKind::MarvelD6 => self.rng.roll(6) as i64,
+            // Narrative dice have no numeric face; roll_pool routes them
+            // through NarrativeDie::face instead of roll_die.
+            DieKind::Narrative(_) => unreachable!("narrative dice do not roll numeric values"),
         }
     }
 
@@ -691,7 +783,7 @@ impl<R: Rng> Evaluator<'_, R> {
             let mut reroll_count = 0;
             while condition
                 .compare
-                .check(die.face.as_numeric(), condition.value)
+                .check(die.face.numeric_value(), condition.value)
             {
                 if reroll_count >= MAX_REROLLS {
                     return Err(Error::RerollLimit(MAX_REROLLS));
@@ -737,7 +829,7 @@ impl<R: Rng> Evaluator<'_, R> {
 
             // The chain continues based on the natural roll, even for
             // penetrating explosions where the stored face is `natural - 1`.
-            let mut current_value = dice[i].face.as_numeric();
+            let mut current_value = dice[i].face.numeric_value();
             let mut explode_count = 0;
 
             while condition.compare.check(current_value, condition.value) {
@@ -756,7 +848,7 @@ impl<R: Rng> Evaluator<'_, R> {
 
                 if compounding {
                     // Compounding: add to same die
-                    dice[i].face = DieFace::Numeric(dice[i].face.as_numeric() + added_value);
+                    dice[i].face = DieFace::Numeric(dice[i].face.numeric_value() + added_value);
                     dice[i].history.push(DieFace::Numeric(new_value));
                 } else {
                     // Standard: create new die
@@ -791,7 +883,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| dice[i].face.as_numeric());
+        indices.sort_by_key(|&i| dice[i].face.numeric_value());
 
         // Drop the lowest (active_count - n)
         let to_drop = active_count - n;
@@ -814,7 +906,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].face.as_numeric()));
+        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].face.numeric_value()));
 
         // Drop the highest (active_count - n)
         let to_drop = active_count - n;
@@ -831,7 +923,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].face.as_numeric()));
+        indices.sort_by_key(|&i| std::cmp::Reverse(dice[i].face.numeric_value()));
 
         for &i in indices.iter().take(n) {
             dice[i].dropped = true;
@@ -846,7 +938,7 @@ impl<R: Rng> Evaluator<'_, R> {
             .filter(|(_, d)| !d.dropped)
             .map(|(i, _)| i)
             .collect();
-        indices.sort_by_key(|&i| dice[i].face.as_numeric());
+        indices.sort_by_key(|&i| dice[i].face.numeric_value());
 
         for &i in indices.iter().take(n) {
             dice[i].dropped = true;
@@ -857,8 +949,300 @@ impl<R: Rng> Evaluator<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::DicePool;
+    use crate::ast::{DicePool, NarrativeDie, SymbolsOutcome};
     use crate::test_support::TestRng;
+
+    /// Build an unchecked narrative `RollPlan` from `(count, die)` groups.
+    fn narrative_plan(groups: &[(u32, NarrativeDie)]) -> Expr {
+        let pools = groups
+            .iter()
+            .map(|&(count, die)| DicePool {
+                count,
+                kind: DieKind::Narrative(die),
+            })
+            .collect();
+        Expr::Roll(RollPlan::new_unchecked_pools(
+            pools,
+            vec![],
+            ScoringMode::SymbolCancel,
+            vec![AnnotationRule::Triumph, AnnotationRule::Despair],
+        ))
+    }
+
+    /// Evaluate a narrative plan and return its `SymbolsOutcome`.
+    fn narrative_outcome(groups: &[(u32, NarrativeDie)], rolls: Vec<u32>) -> SymbolsOutcome {
+        let expr = narrative_plan(groups);
+        let mut rng = TestRng::new(rolls);
+        match evaluate_with_rng(&expr, &mut rng).unwrap().outcome {
+            RollOutcome::Symbols(o) => o,
+            other => panic!("expected Symbols outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn symbol_cancel_nets_success_against_threat() {
+        // Ability roll 4 = SS, Difficulty roll 4 = Th.
+        let o = narrative_outcome(
+            &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+            vec![4, 4],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 2,
+                advantages: -1,
+                triumphs: 0,
+                despairs: 0,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_reports_triumph_and_despair_uncancelled() {
+        // Proficiency roll 12 = Tr, Challenge roll 12 = De. Triumph's implicit
+        // success and Despair's implicit failure cancel to net 0, but the
+        // Triumph and Despair counts survive.
+        let o = narrative_outcome(
+            &[(1, NarrativeDie::Proficiency), (1, NarrativeDie::Challenge)],
+            vec![12, 12],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 0,
+                advantages: 0,
+                triumphs: 1,
+                despairs: 1,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_triumph_success_can_be_outvoted() {
+        // Proficiency roll 12 = Tr (implicit +1 success), Difficulty roll 2 = F,
+        // Setback roll 3 = F. Net successes (0 + 1) - (2 + 0) = -1; Triumph
+        // symbol still reported.
+        let o = narrative_outcome(
+            &[
+                (1, NarrativeDie::Proficiency),
+                (1, NarrativeDie::Difficulty),
+                (1, NarrativeDie::Setback),
+            ],
+            vec![12, 2, 3],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: -1,
+                advantages: 0,
+                triumphs: 1,
+                despairs: 0,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_tie_is_all_zero() {
+        // Ability roll 2 = S, Difficulty roll 2 = F.
+        let o = narrative_outcome(
+            &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+            vec![2, 2],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 0,
+                advantages: 0,
+                triumphs: 0,
+                despairs: 0,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_force_pips_never_enter_nets() {
+        // Force roll 7 = Dk Dk. Dark pips reported; nets stay zero.
+        let o = narrative_outcome(&[(1, NarrativeDie::Force)], vec![7]);
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 0,
+                advantages: 0,
+                triumphs: 0,
+                despairs: 0,
+                light: 0,
+                dark: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn narrative_outcome_is_not_numeric() {
+        let expr = narrative_plan(&[(1, NarrativeDie::Ability)]);
+        let mut rng = TestRng::new(vec![4]);
+        let outcome = evaluate_with_rng(&expr, &mut rng).unwrap().outcome;
+        assert_eq!(outcome.as_numeric(), None);
+    }
+
+    #[test]
+    fn narrative_pushes_triumph_and_despair_annotations() {
+        // Proficiency roll 12 = Tr, Challenge roll 12 = De.
+        let expr = narrative_plan(&[(1, NarrativeDie::Proficiency), (1, NarrativeDie::Challenge)]);
+        let mut rng = TestRng::new(vec![12, 12]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(
+            result.annotations,
+            vec![Annotation::Triumph, Annotation::Despair]
+        );
+    }
+
+    #[test]
+    fn narrative_omits_absent_annotations() {
+        // Ability roll 4 = SS, Difficulty roll 4 = Th: no Triumph or Despair.
+        let expr = narrative_plan(&[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)]);
+        let mut rng = TestRng::new(vec![4, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(result.annotations.is_empty());
+    }
+
+    #[test]
+    fn narrative_pushes_each_annotation_at_most_once() {
+        // Two Proficiency dice both rolling Tr merge to two Triumph symbols,
+        // but the annotation is pushed only once.
+        let expr = narrative_plan(&[(2, NarrativeDie::Proficiency)]);
+        let mut rng = TestRng::new(vec![12, 12]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.annotations, vec![Annotation::Triumph]);
+    }
+
+    /// Evaluate a narrative plan and return its formatted expression.
+    fn narrative_expression(groups: &[(u32, NarrativeDie)], rolls: Vec<u32>) -> String {
+        let expr = narrative_plan(groups);
+        let mut rng = TestRng::new(rolls);
+        evaluate_with_rng(&expr, &mut rng).unwrap().expression
+    }
+
+    #[test]
+    fn narrative_formats_success_against_threat() {
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+                vec![4, 4],
+            ),
+            "1dAbility&1dDifficulty[SS | Th] = 2 successes, 1 threat"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_spec_worked_example() {
+        // Spec §2.9: faces S+A, A+A | Th ⇒ net 1 success, 2 advantages.
+        assert_eq!(
+            narrative_expression(
+                &[(2, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+                vec![7, 8, 4],
+            ),
+            "2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_triumph_and_despair() {
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Proficiency), (1, NarrativeDie::Challenge)],
+                vec![12, 12],
+            ),
+            "1dProficiency&1dChallenge[Tr | De] = 1 triumph, 1 despair"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_tie_as_wash() {
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+                vec![2, 2],
+            ),
+            "1dAbility&1dDifficulty[S | F] = wash"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_net_failure() {
+        // Difficulty roll 2 = F, Ability roll 1 = blank: net one failure.
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Difficulty), (1, NarrativeDie::Ability)],
+                vec![2, 1],
+            ),
+            "1dDifficulty&1dAbility[F | -] = 1 failure"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_force_pips() {
+        assert_eq!(
+            narrative_expression(&[(1, NarrativeDie::Force)], vec![7]),
+            "1dForce[DkDk] = 2 dark"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_blank_face_as_dash() {
+        // Boost roll 1 is a blank face; the roll nets to wash.
+        assert_eq!(
+            narrative_expression(&[(1, NarrativeDie::Boost)], vec![1]),
+            "1dBoost[-] = wash"
+        );
+    }
+
+    #[test]
+    fn narrative_roll_in_arithmetic_errors_non_numeric() {
+        // 1dAbility + 2: the narrative operand has no numeric value.
+        let expr = Expr::BinOp {
+            op: Op::Add,
+            left: Box::new(narrative_plan(&[(1, NarrativeDie::Ability)])),
+            right: Box::new(Expr::Number(2)),
+        };
+        let mut rng = TestRng::new(vec![4]);
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::NonNumericOutcome)));
+    }
+
+    #[test]
+    fn evaluate_total_over_narrative_errors_non_numeric() {
+        // The sim path (simulate_with_rng -> evaluate_total) rejects a
+        // narrative expression cleanly rather than scoring it.
+        let expr = narrative_plan(&[(1, NarrativeDie::Ability)]);
+        let mut rng = TestRng::new(vec![4]);
+        let result = evaluate_total(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::NonNumericOutcome)));
+    }
+
+    #[test]
+    fn narrative_pool_union_in_arithmetic_errors_non_numeric() {
+        // 2dAbility&1dBoost + 2: the pool-union operand has no numeric value.
+        // Spec §2.8 seam case: pool-union binds tighter than arithmetic.
+        let expr = Expr::BinOp {
+            op: Op::Add,
+            left: Box::new(narrative_plan(&[
+                (2, NarrativeDie::Ability),
+                (1, NarrativeDie::Boost),
+            ])),
+            right: Box::new(Expr::Number(2)),
+        };
+        let mut rng = TestRng::new(vec![4, 3, 2]);
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::NonNumericOutcome)));
+    }
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
@@ -926,6 +1310,51 @@ mod tests {
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.outcome, RollOutcome::Numeric(7));
+    }
+
+    #[test]
+    fn roll_pools_concatenates_multiple_groups_in_order() {
+        // Do NOT route this plan through evaluate/score: ScoringMode::SymbolCancel
+        // doesn't exist yet, and Symbols faces panic in the Sum arm's
+        // numeric_value(). Drive roll_pools directly and inspect the dice.
+        let plan = RollPlan::new_unchecked_pools(
+            vec![
+                DicePool {
+                    count: 2,
+                    kind: DieKind::Narrative(NarrativeDie::Ability),
+                },
+                DicePool {
+                    count: 1,
+                    kind: DieKind::Narrative(NarrativeDie::Difficulty),
+                },
+            ],
+            vec![],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![4, 7, 8]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: true,
+        };
+        let dice = evaluator.roll_pools(plan.pools());
+
+        assert_eq!(dice.len(), 3, "count_a (2) + count_b (1) dice expected");
+        assert_eq!(
+            dice[0].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Success, Symbol::Success])),
+            "first Ability die (roll 4)"
+        );
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Success, Symbol::Advantage])),
+            "second Ability die (roll 7), still ahead of the Difficulty group"
+        );
+        assert_eq!(
+            dice[2].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Failure, Symbol::Threat])),
+            "Difficulty die (roll 8) rolled after both Ability dice"
+        );
     }
 
     #[test]
@@ -1264,8 +1693,8 @@ mod tests {
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.outcome, RollOutcome::Numeric(9)); // 6 + 3 (4-1)
         assert_eq!(result.dice.len(), 2); // Two separate dice
-        assert_eq!(result.dice[0].face.as_numeric(), 6);
-        assert_eq!(result.dice[1].face.as_numeric(), 3); // 4-1 penetrating
+        assert_eq!(result.dice[0].face.as_numeric(), Some(6));
+        assert_eq!(result.dice[1].face.as_numeric(), Some(3)); // 4-1 penetrating
     }
 
     #[test]
@@ -1492,7 +1921,7 @@ mod tests {
         let crit_die = result
             .dice
             .iter()
-            .find(|d| d.face.as_numeric() == 6)
+            .find(|d| d.face.as_numeric() == Some(6))
             .unwrap();
         assert!(crit_die.is_crit_success);
     }
@@ -1610,13 +2039,13 @@ mod tests {
             .dice
             .iter()
             .filter(|d| !d.dropped)
-            .map(|d| d.face.as_numeric())
+            .map(|d| d.face.as_numeric().unwrap())
             .collect();
         let kept_reroll_first: Vec<i64> = reroll_first
             .dice
             .iter()
             .filter(|d| !d.dropped)
-            .map(|d| d.face.as_numeric())
+            .map(|d| d.face.as_numeric().unwrap())
             .collect();
         assert_eq!(kept_keep_first, kept_reroll_first);
     }
@@ -1870,24 +2299,26 @@ mod tests {
 
     /// Score a 3-die face triple directly via the `score` function.
     fn score_marvel(l: i64, m: i64, r: i64) -> RollOutcome {
+        // Build faces the way `roll_pool` does: a raw 1 on the middle die is
+        // the M face, so the middle argument is routed through the producer.
         let dice = vec![
             DieResult {
-                face: DieFace::Numeric(l),
-                history: vec![DieFace::Numeric(l)],
+                face: marvel_face(0, l),
+                history: vec![marvel_face(0, l)],
                 dropped: false,
                 is_crit_success: false,
                 is_crit_failure: false,
             },
             DieResult {
-                face: DieFace::Numeric(m),
-                history: vec![DieFace::Numeric(m)],
+                face: marvel_face(1, m),
+                history: vec![marvel_face(1, m)],
                 dropped: false,
                 is_crit_success: false,
                 is_crit_failure: false,
             },
             DieResult {
-                face: DieFace::Numeric(r),
-                history: vec![DieFace::Numeric(r)],
+                face: marvel_face(2, r),
+                history: vec![marvel_face(2, r)],
                 dropped: false,
                 is_crit_success: false,
                 is_crit_failure: false,
@@ -2161,11 +2592,61 @@ mod tests {
         // rank, so the current face stays while the attempted face is recorded.
         let mut rng = TestRng::new(vec![2, 1, 3, 1]);
         let result = evaluate_with_rng(&crate::parse("3dMarvelt1").unwrap(), &mut rng).unwrap();
-        assert_eq!(result.dice[1].face, DieFace::Numeric(1));
+        let m_face = DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]));
+        assert_eq!(result.dice[1].face, m_face);
+        assert_eq!(result.dice[1].history, vec![m_face, m_face]);
+    }
+
+    #[test]
+    fn marvel_middle_die_raw_one_is_m_face_with_total_13() {
+        // rng [1,1,6]: outer 1, middle raw 1 ⇒ M face, outer 6. No auto-fail
+        // (right die is 6), so M contributes 6; total 1 + 6 + 6 = 13, m_shown.
+        let mut rng = TestRng::new(vec![1, 1, 6]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvel").unwrap(), &mut rng).unwrap();
         assert_eq!(
-            result.dice[1].history,
-            vec![DieFace::Numeric(1), DieFace::Numeric(1)]
+            result.dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
         );
+        assert_eq!(result.expression, "3dMarvel[1, M, 6] = 13 (M shown)");
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 13);
+                assert!(o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn marvel_edge_reroll_to_one_on_middle_die_yields_m_face() {
+        // Initial [3,2,4]: ranks 3,2,4 ⇒ lowest is the middle die (rank 2).
+        // Edge rerolls it to raw 1 ⇒ M face (rank 7 > 2), kept in both face
+        // and history. Total 3 + 6 + 4 = 13, m_shown.
+        let mut rng = TestRng::new(vec![3, 2, 4, 1]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvele1").unwrap(), &mut rng).unwrap();
+        let m_face = DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]));
+        assert_eq!(result.dice[1].face, m_face);
+        assert_eq!(result.dice[1].history, vec![DieFace::Numeric(2), m_face]);
+        match result.outcome {
+            RollOutcome::Marvel(o) => {
+                assert_eq!(o.total, 13);
+                assert!(o.m_shown);
+                assert!(!o.auto_fail);
+            }
+            other => panic!("expected Marvel outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn marvel_outer_die_raw_one_stays_numeric_rank_one() {
+        // rng [1,5,4]: only the middle die can be M. An outer die rolling a
+        // raw 1 stays Numeric(1) and ranks 1.
+        let mut rng = TestRng::new(vec![1, 5, 4]);
+        let result = evaluate_with_rng(&crate::parse("3dMarvel").unwrap(), &mut rng).unwrap();
+        assert_eq!(result.dice[0].face, DieFace::Numeric(1));
+        assert!(!is_marvel_face(result.dice[0].face));
+        assert_eq!(rank(result.dice[0].face), 1);
     }
 
     // --- Marvel Edge/Trouble exhaustive enumeration oracles ---
@@ -2370,16 +2851,21 @@ mod tests {
 
     // --- ChaseFantastic behavioral tests ---
 
-    /// Build a 3-die Marvel `Vec<DieResult>` with the given faces.
-    fn marvel_dice(faces: [i64; 3]) -> Vec<DieResult> {
-        faces
-            .iter()
-            .map(|&f| DieResult {
-                face: DieFace::Numeric(f),
-                history: vec![DieFace::Numeric(f)],
-                dropped: false,
-                is_crit_success: false,
-                is_crit_failure: false,
+    /// Build a 3-die Marvel `Vec<DieResult>` from raw values, routing each
+    /// through the per-index Marvel producer so a raw 1 on the middle die is
+    /// the M face (matching how `roll_pool` builds a real Marvel pool).
+    fn marvel_dice(raws: [i64; 3]) -> Vec<DieResult> {
+        raws.iter()
+            .enumerate()
+            .map(|(i, &raw)| {
+                let face = marvel_face(i, raw);
+                DieResult {
+                    face,
+                    history: vec![face],
+                    dropped: false,
+                    is_crit_success: false,
+                    is_crit_failure: false,
+                }
             })
             .collect()
     }
@@ -2398,9 +2884,12 @@ mod tests {
         evaluator
             .apply_edge(&mut dice, 1, EdgePolicy::ChaseFantastic)
             .unwrap();
-        assert_eq!(dice[0].face.as_numeric(), 2);
-        assert_eq!(dice[1].face.as_numeric(), 1);
-        assert_eq!(dice[2].face.as_numeric(), 4);
+        assert_eq!(dice[0].face.as_numeric(), Some(2));
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
+        );
+        assert_eq!(dice[2].face.as_numeric(), Some(4));
     }
 
     #[test]
@@ -2417,9 +2906,12 @@ mod tests {
         evaluator
             .apply_edge(&mut dice, 1, EdgePolicy::ChaseFantastic)
             .unwrap();
-        assert_eq!(dice[0].face.as_numeric(), 5);
-        assert_eq!(dice[1].face.as_numeric(), 1);
-        assert_eq!(dice[2].face.as_numeric(), 6);
+        assert_eq!(dice[0].face.as_numeric(), Some(5));
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
+        );
+        assert_eq!(dice[2].face.as_numeric(), Some(6));
     }
 
     #[test]
@@ -2437,9 +2929,76 @@ mod tests {
         evaluator
             .apply_edge(&mut dice, 2, EdgePolicy::ChaseFantastic)
             .unwrap();
-        assert_eq!(dice[0].face.as_numeric(), 6);
-        assert_eq!(dice[1].face.as_numeric(), 1);
-        assert_eq!(dice[2].face.as_numeric(), 4);
+        assert_eq!(dice[0].face.as_numeric(), Some(6));
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
+        );
+        assert_eq!(dice[2].face.as_numeric(), Some(4));
+    }
+
+    // --- Narrative die pool rolling tests ---
+
+    #[test]
+    fn roll_pool_produces_narrative_symbol_faces() {
+        // A 2-die Ability(d8) pool with rolls 4, 6: roll 4 = S+S, roll 6 = A.
+        let mut rng = TestRng::new(vec![4, 6]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        let pool = DicePool {
+            count: 2,
+            kind: DieKind::Narrative(NarrativeDie::Ability),
+        };
+        let dice = evaluator.roll_pool(&pool);
+        assert_eq!(
+            dice[0].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Success, Symbol::Success]))
+        );
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Advantage]))
+        );
+        assert_eq!(dice[0].history, vec![dice[0].face]);
+        assert_eq!(dice[1].history, vec![dice[1].face]);
+        assert!(!dice[0].dropped && !dice[1].dropped);
+    }
+
+    /// An `Rng` that asserts every `roll` call requests `expected_max`,
+    /// catching a `roll_pool` narrative branch that requests the wrong
+    /// die's side count.
+    struct AssertingRng {
+        expected_max: u32,
+        value: u32,
+    }
+
+    impl Rng for AssertingRng {
+        fn roll(&mut self, max: u32) -> u32 {
+            assert_eq!(max, self.expected_max, "requested wrong die's side count");
+            self.value
+        }
+    }
+
+    #[test]
+    fn roll_pool_requests_the_rolled_narrative_dies_own_count() {
+        let mut rng = AssertingRng {
+            expected_max: NarrativeDie::Proficiency.count(),
+            value: 12,
+        };
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        let pool = DicePool {
+            count: 1,
+            kind: DieKind::Narrative(NarrativeDie::Proficiency),
+        };
+        let dice = evaluator.roll_pool(&pool);
+        assert_eq!(
+            dice[0].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Triumph]))
+        );
     }
 
     // --- MAX_REROLLS guard tests ---
@@ -2747,6 +3306,7 @@ mod serde_tests {
     use super::{DieResult, FastRng, Rng, RngCheckpoint, RollResult};
     use crate::ast::{
         Annotation, DieFace, EdgePolicy, Fantastic, MarvelCheck, MarvelOutcome, RollOutcome,
+        Symbol, SymbolPool,
     };
 
     #[test]
@@ -2785,6 +3345,16 @@ mod serde_tests {
         assert_eq!(json["dice"][1]["dropped"], true);
         assert_eq!(json["dice"][1]["is_crit_failure"], true);
         assert_eq!(json["annotations"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn marvel_m_face_serializes_as_symbols_map() {
+        let m_face = DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]));
+        let json = serde_json::to_value(m_face).unwrap();
+        assert_eq!(json, serde_json::json!({ "Symbols": { "Marvel": 1 } }));
+
+        let restored: DieFace = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, m_face);
     }
 
     #[test]

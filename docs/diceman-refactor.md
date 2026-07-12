@@ -444,27 +444,42 @@ RollPlan {
 
 ⸻
 
-As-Built Type Reconciliation (Phases 1–8)
+As-Built Type Reconciliation (Phases 1–9)
 
 The type sketches above were written before implementation and describe intent.
-The shipped types differ in the following ways. Phase 9 (Genesys / narrative
-dice) is not yet implemented, so its types are absent by design.
+The shipped types differ in the following ways.
 
-* DieKind::Numeric is named DieKind::Number in code.
+* DieKind::Numeric is named DieKind::Number in code. The catalog's
+  Narrative(NarrativeDie) variant ships as sketched, covering the seven
+  Genesys/Star Wars dice (Boost, Setback, Ability, Difficulty, Proficiency,
+  Challenge, Force).
 * RollOutcome::Structured(GameAgnosticOutcome) shipped as the concrete
   RollOutcome::Marvel(MarvelOutcome); GameAgnosticOutcome was never created.
-  RollOutcome::Symbols is deferred to Phase 9.
-* FaceCondition is named Condition throughout (faces remain numeric until
-  symbol faces land in Phase 9).
+  RollOutcome::Symbols ships holding a SymbolsOutcome struct (signed
+  successes/advantages nets plus triumphs/despairs/light/dark counts), not
+  the bare SymbolPool the catalog sketched.
+* FaceCondition is named Condition throughout. Condition itself stays
+  numeric-only (a Compare/i64 pair, used by CountSuccesses scoring and by
+  reroll/explode on numeric die kinds); narrative symbol scoring goes
+  through ScoringMode::SymbolCancel instead of a Condition threshold.
 * DieResult does not carry annotations: Vec<Annotation>. Per-die crits are two
   bools (is_crit_success / is_crit_failure); pool-level annotations live on
-  RollResult.annotations.
+  RollResult.annotations. Narrative Triumph/Despair are pool-level
+  annotations the same way Marvel Fantastic/AutoFail are, not per-die.
 * Explode does not use a mode: ExplodeMode enum. It uses compounding: bool and
   penetrating: bool.
 * RollModifier gained Edge { count, policy } and Trouble { count } in Phase 8
-  (omitted from the catalog above).
-* Annotation ships Fantastic and AutoFail. The catalog's Success / Failure and
-  the reserved CriticalSuccess / CriticalFailure variants have no producers yet.
+  (omitted from the catalog above). Narrative rolls accept no modifiers at
+  all — Genesys/Star Wars has no keep/reroll/explode/Edge equivalent.
+* Annotation ships Fantastic and AutoFail alongside the catalog's Triumph and
+  Despair, both with producers. The catalog's Success / Failure and the
+  reserved CriticalSuccess / CriticalFailure variants have no producers yet.
+* RollPlan's pool field ships as pools: Vec<DicePool> — private, plural, and
+  non-empty, with more than one group only when every group is narrative —
+  rather than the catalog's single public pool: DicePool field. It is
+  exposed through the pools() getter; new(pool, ...) builds a single-group
+  plan and new_narrative(pools, ...) builds a multi-group narrative plan.
+  Pool unions (`&`) are a Phase 9 addition.
 
 ⸻
 
@@ -615,14 +630,61 @@ API policy only; it has no notation token.
 
 Phase 9
 
-Implement Genesys / Star Wars support.
+Genesys / Star Wars narrative dice support.
 
-Add:
+The evaluator supports narrative symbol dice through the same pipeline used
+by other dice systems:
 
-* Narrative dice
-* Symbol faces
-* Symbol cancellation
-* Triumph / Despair annotations
+* DieKind::Narrative(NarrativeDie), covering the seven Genesys/Star Wars
+  dice: Boost, Setback, Ability, Difficulty, Proficiency, Challenge, Force.
+* DieFace::Symbols(SymbolPool), a multiset of Symbol values (Success,
+  Advantage, Triumph, Failure, Threat, Despair, Light, Dark, Marvel) carried
+  on the face itself. The Marvel M face is unified onto this same
+  representation, carrying Symbol::Marvel; DieFace::Numeric covers every
+  other die's faces.
+* ScoringMode::SymbolCancel, which merges every rolled face's SymbolPool and
+  cancels opposing symbols (Success/Failure into successes, Advantage/Threat
+  into advantages) into a RollOutcome::Symbols(SymbolsOutcome).
+* AnnotationRule::Triumph / AnnotationRule::Despair and the corresponding
+  Annotation variants, set when the scored roll carries at least one Triumph
+  or Despair symbol. Each Triumph also nets an implicit success and each
+  Despair an implicit failure into SymbolsOutcome's signed successes count;
+  the Triumph/Despair symbol counts themselves are reported uncancelled.
+  Light and Dark Force pips never cancel and never enter the success/
+  advantage nets.
+
+The notation surface is the `&` pool-union operator joining narrative die
+groups by full word name, e.g. `2dAbility&1dProficiency&2dDifficulty`. A
+narrative roll may combine any number of pool groups, all of narrative kind;
+`RollPlan::new_narrative` and the parser's `validate_narrative_roll` enforce
+that a narrative plan carries no modifiers (Genesys has no keep/reroll/
+explode/Edge), that every group rolls at least one die, and that annotation
+rules are exactly [Triumph, Despair]. A single-group narrative roll is also
+accepted by `RollPlan::new` and held to the same rules. Mixing Force dice
+with skill dice in one union (e.g. `1dAbility&1dForce`) is allowed: in-game
+they aren't rolled together, but `SymbolsOutcome` keeps Force's light/dark
+pips on separate fields from the success/advantage nets, leaving the
+game layer to interpret.
+
+RollPlan stores its dice as `pools: Vec<DicePool>` (non-empty; more than one
+group only when every group is DieKind::Narrative), exposed through the
+`pools()` getter. `RollPlan::new` takes a single pool and constructs a
+one-element `pools`; `RollPlan::new_narrative` takes the group list
+directly.
+
+`roll()`/`roll_with_rng()` take narrative notation the same as any other
+expression; there is no typed `roll_genesys` API analogous to `roll_marvel`.
+The `diceman genesys` CLI subcommand takes per-die-kind count flags
+(`--ability`, `--proficiency`, `--boost`, `--difficulty`, `--challenge`,
+`--setback`, `--force`), builds the `&`-joined notation string, and rolls it
+through the general pipeline. Python bindings expose narrative results as
+the `"symbols"` RollOutcome kind; `successes`, `advantages`, `triumphs`,
+`despairs`, `light`, and `dark` are populated only for that kind and `None`
+otherwise.
+
+`RollOutcome::Symbols` has no single numeric value: `as_numeric` returns
+`None` for it, so any arithmetic expression or `sim` over a narrative roll
+fails with `Error::NonNumericOutcome`.
 
 ⸻
 

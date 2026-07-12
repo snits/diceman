@@ -19,7 +19,7 @@ diceman roll "1d20 + 7"      # Attack roll with modifier
 diceman roll "3dMarvel"      # Roll a Marvel Multiverse d616 pool
 ```
 
-**Note:** Quote expressions containing `>`, `<`, `!`, or `*` to prevent shell interpretation.
+**Note:** Quote expressions containing `>`, `<`, `!`, `*`, or `&` to prevent shell interpretation (an unquoted `&` backgrounds the command).
 
 ### Simulate distributions
 
@@ -35,6 +35,17 @@ diceman marvel --target 12 --edges 1
 diceman marvel --target 12 --edges 1 --policy chase_fantastic
 diceman marvel --target 12 --sim 10000 --json
 ```
+
+### Genesys/Star Wars narrative dice
+
+```bash
+diceman genesys --ability 2 --difficulty 1
+diceman genesys --proficiency 1 --challenge 2 --setback 1
+diceman genesys --force 1 --json
+```
+
+`genesys` is the documented entry point for narrative pools — it builds the
+`&`-joined notation for you, so there's nothing to quote.
 
 ### Show notation help
 
@@ -167,6 +178,37 @@ Chase-fantastic Edge is available through the typed Rust/Python APIs and
 - `3dMarvele1` - Roll with Edge
 - `3dMarvelt1` - Roll with Trouble
 - `diceman marvel --target 12 --edges 1` - Roll a target check and report the verdict
+
+### Genesys/Star Wars Narrative Dice
+
+Roll a pool of narrative dice by joining full die-word groups with `&`. Faces
+cancel pairwise into net facts instead of summing to a number, so narrative
+rolls can't appear in arithmetic (`2dAbility + 2` errors — dice result is not
+numeric) and can't be simulated with `diceman sim`.
+
+| Notation | Description |
+|----------|-------------|
+| `NdAbility` | Ability dice (green) |
+| `NdProficiency` | Proficiency dice (yellow) |
+| `NdBoost` | Boost dice (blue) |
+| `NdDifficulty` | Difficulty dice (purple) |
+| `NdChallenge` | Challenge dice (red) |
+| `NdSetback` | Setback dice (black) |
+| `NdForce` | Force dice (white) |
+
+Face abbreviations: `S` success, `A` advantage, `Tr` triumph, `F` failure,
+`Th` threat, `De` despair, `L` light, `Dk` dark, `-` blank. Net facts:
+`successes = (S + Tr) - (F + De)`, `advantages = A - Th`. Triumph and despair
+counts are always reported, never cancelled; light and dark never cancel
+each other.
+
+**Note:** Quote raw narrative notation in a shell — an unquoted `&`
+backgrounds the command. Prefer `diceman genesys --ability 2 --difficulty 1`
+over hand-written notation.
+
+**Examples:**
+- `2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages`
+- `diceman genesys --proficiency 1 --challenge 2` — roll via the CLI subcommand
 
 ### Critical Markers
 
