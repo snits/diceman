@@ -59,7 +59,7 @@ fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome
     let modifiers = modifiers_str(plan);
     format!(
         "{}dMarvel{}[{}] = {}{}",
-        plan.pool().count,
+        plan.pools()[0].count,
         modifiers,
         dice_str,
         marvel.total,
@@ -121,7 +121,7 @@ fn modifiers_str(plan: &RollPlan) -> String {
 /// Digit dice carry no modifiers or annotations from the parser, so dropped
 /// dice and crit markers do not arise here; values render plain.
 fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let sides = match plan.pool().kind {
+    let sides = match plan.pools()[0].kind {
         DieKind::Number(n) => n.to_string(),
         // The parser only pairs DigitConcatenate with DieKind::Number.
         DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
@@ -131,7 +131,7 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
         DieKind::Narrative(_) => unreachable!("narrative dice do not use digit formatting"),
     };
     let prefix =
-        std::iter::repeat_n(sides.as_str(), plan.pool().count as usize).collect::<String>();
+        std::iter::repeat_n(sides.as_str(), plan.pools()[0].count as usize).collect::<String>();
     let dice_str = dice
         .iter()
         .map(|d| d.face.to_string())
@@ -142,7 +142,7 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
 
 /// Format a standard (sum or success-counting) roll.
 fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let kind_str = match plan.pool().kind {
+    let kind_str = match plan.pools()[0].kind {
         DieKind::Number(n) => n.to_string(),
         DieKind::Percent => "%".to_string(),
         DieKind::Fudge => "F".to_string(),
@@ -201,7 +201,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         let success_word = if total == 1 { "success" } else { "successes" };
         format!(
             "{}d{}{}{}[{}] = {} {}",
-            plan.pool().count,
+            plan.pools()[0].count,
             kind_str,
             modifiers,
             crit_str,
@@ -212,7 +212,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
     } else {
         format!(
             "{}d{}{}{}[{}] = {}",
-            plan.pool().count,
+            plan.pools()[0].count,
             kind_str,
             modifiers,
             crit_str,

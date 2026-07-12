@@ -355,9 +355,9 @@ impl<R: Rng> Evaluator<'_, R> {
     }
 
     fn evaluate_roll(&mut self, plan: &RollPlan) -> Result<RollResult> {
-        // Pipeline: roll_pool -> apply_modifiers -> score -> apply_annotations -> format
-        let mut dice = self.roll_pool(plan.pool());
-        self.apply_modifiers(&mut dice, &plan.pool().kind, plan.modifiers())?;
+        // Pipeline: roll_pools -> apply_modifiers -> score -> apply_annotations -> format
+        let mut dice = self.roll_pools(plan.pools());
+        self.apply_modifiers(&mut dice, &plan.pools()[0].kind, plan.modifiers())?;
         let outcome = Self::score(&dice, plan.scoring())?;
 
         let (expression, annotations) = if self.total_only {
@@ -374,6 +374,16 @@ impl<R: Rng> Evaluator<'_, R> {
             expression,
             annotations,
         })
+    }
+
+    /// Roll every pool group in order, concatenating their dice into one
+    /// flat slice that is scored as a unit.
+    fn roll_pools(&mut self, pools: &[DicePool]) -> Vec<DieResult> {
+        let mut dice = Vec::new();
+        for pool in pools {
+            dice.extend(self.roll_pool(pool));
+        }
+        dice
     }
 
     /// Roll a fresh pool of dice, one `DieResult` per die in the pool.
@@ -965,6 +975,51 @@ mod tests {
         let mut rng = TestRng::new(vec![3, 4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.outcome, RollOutcome::Numeric(7));
+    }
+
+    #[test]
+    fn roll_pools_concatenates_multiple_groups_in_order() {
+        // Do NOT route this plan through evaluate/score: ScoringMode::SymbolCancel
+        // doesn't exist yet, and Symbols faces panic in the Sum arm's
+        // numeric_value(). Drive roll_pools directly and inspect the dice.
+        let plan = RollPlan::new_unchecked_pools(
+            vec![
+                DicePool {
+                    count: 2,
+                    kind: DieKind::Narrative(NarrativeDie::Ability),
+                },
+                DicePool {
+                    count: 1,
+                    kind: DieKind::Narrative(NarrativeDie::Difficulty),
+                },
+            ],
+            vec![],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![4, 7, 8]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: true,
+        };
+        let dice = evaluator.roll_pools(plan.pools());
+
+        assert_eq!(dice.len(), 3, "count_a (2) + count_b (1) dice expected");
+        assert_eq!(
+            dice[0].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Success, Symbol::Success])),
+            "first Ability die (roll 4)"
+        );
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Success, Symbol::Advantage])),
+            "second Ability die (roll 7), still ahead of the Difficulty group"
+        );
+        assert_eq!(
+            dice[2].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Failure, Symbol::Threat])),
+            "Difficulty die (roll 8) rolled after both Ability dice"
+        );
     }
 
     #[test]

@@ -34,8 +34,11 @@ pub struct DicePool {
 /// A dice roll plan: the normalized execution model produced by the parser.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RollPlan {
-    /// The dice pool to roll.
-    pool: DicePool,
+    /// The dice pool groups to roll, concatenated in order before scoring.
+    ///
+    /// Non-empty. More than one group only occurs when every group's kind is
+    /// `DieKind::Narrative` (current scope, not domain law — see spec §2.5).
+    pools: Vec<DicePool>,
     /// Modifiers applied to the pool before scoring.
     modifiers: Vec<RollModifier>,
     /// How modified dice are converted to a final numeric result.
@@ -112,11 +115,40 @@ impl RollPlan {
         }
 
         Ok(Self {
-            pool,
+            pools: vec![pool],
             modifiers,
             scoring,
             annotation_rules,
         })
+    }
+
+    /// Build a `RollPlan` over multiple narrative pool groups.
+    ///
+    /// Rejects any group whose kind is not `DieKind::Narrative`. The rest of
+    /// the narrative invariant set (`ScoringMode::SymbolCancel` pairing,
+    /// modifier/annotation shape) is enforced by `validate_narrative_roll` at
+    /// the parser boundary and lands here in a later change.
+    pub fn new_narrative(
+        pools: Vec<DicePool>,
+        modifiers: Vec<RollModifier>,
+        scoring: ScoringMode,
+        annotation_rules: Vec<AnnotationRule>,
+    ) -> Result<Self> {
+        for pool in &pools {
+            if !matches!(pool.kind, DieKind::Narrative(_)) {
+                return Err(Error::InvalidNarrativeRoll(format!(
+                    "expected a narrative die kind, found {:?}",
+                    pool.kind
+                )));
+            }
+        }
+
+        Ok(Self::new_unchecked_pools(
+            pools,
+            modifiers,
+            scoring,
+            annotation_rules,
+        ))
     }
 
     /// Build a `RollPlan` without validating the Marvel Multiverse invariant.
@@ -131,16 +163,35 @@ impl RollPlan {
         annotation_rules: Vec<AnnotationRule>,
     ) -> Self {
         Self {
-            pool,
+            pools: vec![pool],
             modifiers,
             scoring,
             annotation_rules,
         }
     }
 
-    /// The dice pool to roll.
-    pub fn pool(&self) -> &DicePool {
-        &self.pool
+    /// Build a `RollPlan` over multiple pool groups without validating any
+    /// invariant.
+    ///
+    /// Bypasses the checks performed by `new`/`new_narrative`; callers must
+    /// guarantee the plan is already valid (e.g. the parser's narrative arm).
+    pub(crate) fn new_unchecked_pools(
+        pools: Vec<DicePool>,
+        modifiers: Vec<RollModifier>,
+        scoring: ScoringMode,
+        annotation_rules: Vec<AnnotationRule>,
+    ) -> Self {
+        Self {
+            pools,
+            modifiers,
+            scoring,
+            annotation_rules,
+        }
+    }
+
+    /// The dice pool groups to roll, in the order their dice are concatenated.
+    pub fn pools(&self) -> &[DicePool] {
+        &self.pools
     }
 
     /// Modifiers applied to the pool before scoring.
@@ -774,10 +825,10 @@ mod tests {
     #[test]
     fn test_roll_plan_has_annotation_rules() {
         let plan = RollPlan {
-            pool: DicePool {
+            pools: vec![DicePool {
                 count: 1,
                 kind: DieKind::Number(20),
-            },
+            }],
             modifiers: vec![],
             scoring: ScoringMode::Sum,
             annotation_rules: vec![
@@ -1168,7 +1219,7 @@ mod tests {
     fn new_unchecked_builds_without_validation() {
         // Deliberately invalid: MarvelD6 kind paired with Sum scoring.
         let plan = RollPlan::new_unchecked(marvel_pool(), vec![], ScoringMode::Sum, vec![]);
-        assert_eq!(plan.pool(), &marvel_pool());
+        assert_eq!(plan.pools(), &[marvel_pool()]);
         assert_eq!(plan.modifiers(), &[]);
         assert_eq!(plan.scoring(), &ScoringMode::Sum);
         assert_eq!(plan.annotation_rules(), &[]);
