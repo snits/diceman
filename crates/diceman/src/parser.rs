@@ -1794,4 +1794,36 @@ mod tests {
         let err = crate::roll("(1dBoost) * 2").unwrap_err();
         assert!(matches!(err, Error::NonNumericOutcome));
     }
+
+    // --- Round-trip: parse -> format -> parse for capped explosions ---
+
+    #[test]
+    fn test_format_roundtrip_explode_limit() {
+        use crate::roller::evaluate_with_rng;
+        use crate::test_support::TestRng;
+
+        let expr = parse("1d6!1").unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(
+            result.expression.starts_with("1d6!1"),
+            "expected expression to start with 1d6!1, got: {}",
+            result.expression
+        );
+    }
+
+    #[test]
+    fn test_format_roundtrip_explode_limit_full() {
+        use crate::roller::evaluate_with_rng;
+        use crate::test_support::TestRng;
+
+        let expr = parse("1d6!!p2>4").unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(
+            result.expression.starts_with("1d6!!p2>4"),
+            "expected expression to start with 1d6!!p2>4, got: {}",
+            result.expression
+        );
+    }
 }
