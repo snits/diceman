@@ -50,6 +50,15 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-12 02:12) **FINAL WHOLE-BRANCH REVIEW: MERGEABLE.**
+  381 tests green; Marvel oracle span (orig roller.rs 2172-2369) verified
+  byte-untouched; only the two known deferrals; API surface minimal; docs
+  accurate. Three nits, none blocking: Difficulty-case already fixed by
+  6fed7efa (reviewer ran pre-fix); dual-validator drift already carries the
+  cross-ref comment; rank() naming was the spec's explicit call — leaving
+  as-is. **MERGING NOW to local main with --no-ff from the main checkout.**
+  Rebase skipped: main unmoved at the branch base (637e869), verified.
+
 - (reviewer seat, 2026-07-12 01:58) **T9 (19c2be894733) REVIEW PASSED**
   (gates green; version/docs verified; roborev clean — it cross-checked the
   as-built doc claims against the code). **roborev --branch: one Low,
