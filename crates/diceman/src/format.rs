@@ -127,6 +127,8 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
         DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
             unreachable!("DigitConcatenate requires DieKind::Number")
         }
+        // Narrative dice never reach digit formatting.
+        DieKind::Narrative(_) => unreachable!("narrative dice do not use digit formatting"),
     };
     let prefix =
         std::iter::repeat_n(sides.as_str(), plan.pool().count as usize).collect::<String>();
@@ -145,6 +147,8 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         DieKind::Percent => "%".to_string(),
         DieKind::Fudge => "F".to_string(),
         DieKind::MarvelD6 => "Marvel".to_string(),
+        // Narrative dice never reach standard formatting.
+        DieKind::Narrative(_) => unreachable!("narrative dice do not use standard formatting"),
     };
 
     let mut modifiers: String = modifiers_str(plan);
