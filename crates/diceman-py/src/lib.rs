@@ -514,9 +514,9 @@ mod tests {
             successes: 2,
             advantages: -1,
             triumphs: 1,
-            despairs: 0,
+            despairs: 2,
             light: 3,
-            dark: 0,
+            dark: 4,
         }));
 
         assert_eq!(outcome.kind, "symbols");
@@ -524,9 +524,9 @@ mod tests {
         assert_eq!(outcome.successes, Some(2));
         assert_eq!(outcome.advantages, Some(-1));
         assert_eq!(outcome.triumphs, Some(1));
-        assert_eq!(outcome.despairs, Some(0));
+        assert_eq!(outcome.despairs, Some(2));
         assert_eq!(outcome.light, Some(3));
-        assert_eq!(outcome.dark, Some(0));
+        assert_eq!(outcome.dark, Some(4));
     }
 
     #[test]
