@@ -235,19 +235,44 @@ pub enum AnnotationRule {
 
 /// The face value a die landed on.
 ///
-/// Numeric dice produce `Numeric`.
+/// Numeric dice produce `Numeric`; special faces carrying narrative symbols
+/// (the Marvel M, Genesys/Star Wars faces) produce `Symbols`. Which face is
+/// special is carried by the face itself, not by pool position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DieFace {
     /// A numeric face (e.g., a d6 showing 4).
     Numeric(i64),
+    /// A face bearing narrative symbols. The Marvel M face is `Symbols`
+    /// containing `Symbol::Marvel`; a Genesys blank face is an empty pool.
+    Symbols(SymbolPool),
 }
 
 impl DieFace {
-    /// Return the numeric value of a `Numeric` face.
-    pub fn as_numeric(self) -> i64 {
+    /// Return the numeric value of a `Numeric` face, or `None` for a symbol face.
+    ///
+    /// Symbol faces have no intrinsic numeric value; any numeric meaning a
+    /// special face carries (the Marvel M contributing 6, or 1 on auto-fail)
+    /// is resolved in scoring against pool context, not stored on the face.
+    pub fn as_numeric(self) -> Option<i64> {
+        match self {
+            DieFace::Numeric(n) => Some(n),
+            DieFace::Symbols(_) => None,
+        }
+    }
+
+    /// Return the numeric value of a face that is numeric by construction.
+    ///
+    /// For call sites where parser validation guarantees a `Numeric` face:
+    /// Sum/CountSuccesses/DigitConcatenate scoring, crit checks, and
+    /// reroll/explode/keep-drop on numeric die kinds. Panics on a symbol
+    /// face, which those sites can never observe.
+    pub(crate) fn numeric_value(self) -> i64 {
         match self {
             DieFace::Numeric(n) => n,
+            DieFace::Symbols(_) => {
+                panic!("numeric_value on a symbol face; this site is numeric by construction")
+            }
         }
     }
 }
@@ -256,6 +281,17 @@ impl fmt::Display for DieFace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DieFace::Numeric(n) => write!(f, "{n}"),
+            DieFace::Symbols(pool) => {
+                if pool.is_empty() {
+                    return write!(f, "-");
+                }
+                for &s in Symbol::ALL.iter() {
+                    for _ in 0..pool.count(s) {
+                        write!(f, "{}", s.abbrev())?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -303,6 +339,21 @@ impl Symbol {
     /// the `Symbol` -> array-index mapping; nothing else assigns positions.
     fn index(self) -> usize {
         self as usize
+    }
+
+    /// The abbreviation used when rendering a symbol on a die face.
+    fn abbrev(self) -> &'static str {
+        match self {
+            Symbol::Success => "S",
+            Symbol::Advantage => "A",
+            Symbol::Triumph => "Tr",
+            Symbol::Failure => "F",
+            Symbol::Threat => "Th",
+            Symbol::Despair => "De",
+            Symbol::Light => "L",
+            Symbol::Dark => "Dk",
+            Symbol::Marvel => "M",
+        }
     }
 }
 
@@ -853,6 +904,52 @@ mod tests {
         assert_eq!(plan.modifiers(), &[]);
         assert_eq!(plan.scoring(), &ScoringMode::Sum);
         assert_eq!(plan.annotation_rules(), &[]);
+    }
+
+    fn marvel_face() -> DieFace {
+        DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
+    }
+
+    #[test]
+    fn as_numeric_is_some_for_numeric_face() {
+        assert_eq!(DieFace::Numeric(4).as_numeric(), Some(4));
+    }
+
+    #[test]
+    fn as_numeric_is_none_for_symbol_face() {
+        assert_eq!(marvel_face().as_numeric(), None);
+    }
+
+    #[test]
+    fn numeric_value_returns_value_for_numeric_face() {
+        assert_eq!(DieFace::Numeric(4).numeric_value(), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "numeric by construction")]
+    fn numeric_value_panics_on_symbol_face() {
+        let _ = marvel_face().numeric_value();
+    }
+
+    #[test]
+    fn marvel_face_displays_as_m() {
+        assert_eq!(marvel_face().to_string(), "M");
+    }
+
+    #[test]
+    fn blank_symbol_face_displays_as_dash() {
+        assert_eq!(DieFace::Symbols(SymbolPool::new()).to_string(), "-");
+    }
+
+    #[test]
+    fn multi_symbol_face_displays_in_declaration_order_with_repeats() {
+        let face = DieFace::Symbols(SymbolPool::of(&[
+            Symbol::Advantage,
+            Symbol::Success,
+            Symbol::Advantage,
+            Symbol::Triumph,
+        ]));
+        assert_eq!(face.to_string(), "SAATr");
     }
 
     #[test]
