@@ -123,10 +123,7 @@ impl<'a> Lexer<'a> {
 
         match ch {
             '0'..='9' => self.number(),
-            'd' => {
-                self.chars.next();
-                Ok(Token::D)
-            }
+            'd' => self.word_or_fallback("ifficulty", Token::Difficulty, Token::D),
             'D' => {
                 if self
                     .peek_next()
@@ -619,11 +616,32 @@ mod tests {
 
     #[test]
     fn test_difficulty_word_token_case_insensitive() {
-        for input in ["Difficulty", "DIFFICULTY"] {
+        for input in ["Difficulty", "DIFFICULTY", "difficulty"] {
             let mut lexer = Lexer::new(input);
             assert_eq!(lexer.next_token().unwrap(), Token::Difficulty);
             assert_eq!(lexer.next_token().unwrap(), Token::Eof);
         }
+    }
+
+    #[test]
+    fn test_lowercase_difficulty_after_d_separator() {
+        // 2ddifficulty: the first 'd' falls back to the separator (next char
+        // is 'd', not 'i'), the second lexes the full word.
+        let mut lexer = Lexer::new("2ddifficulty");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(2));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Difficulty);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_d_separator_unaffected_by_difficulty_lookahead() {
+        // Plain numeric notation still lexes 'd' as the separator.
+        let mut lexer = Lexer::new("2d6");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(2));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
     }
 
     #[test]
