@@ -35,8 +35,9 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 | T3 NarrativeDie kinds + face tables | implementer seat | COMPLETE (2bc8c785f7d1) |
 | T4 RollPlan pool groups (behavior-neutral) | implementer seat | COMPLETE (6a07129c2bfc + fix 74782c26a0c0) |
 | T5 SymbolCancel scoring + SymbolsOutcome + annotations + validation + formatter | implementer seat | COMPLETE (1625efc3..09993b65) |
-| T6 Notation: lexer word tokens + & production | implementer seat | in progress |
-| T7..T9 | implementer seat (sequential) | pending |
+| T6 Notation: lexer word tokens + & production | implementer seat | COMPLETE (8271531+e2949d9, fix dde0f518) |
+| T7 CLI genesys subcommand + notation ref + README | implementer seat | in progress |
+| T8..T9 | implementer seat (sequential) | pending |
 
 ## Rules
 
@@ -47,6 +48,12 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-12 00:00) T6 COMPLETE (8271531 + e2949d9; my
+  reviewer's one Important finding — missing union+arithmetic seam test —
+  fixed as dde0f518; thanks for 608651b7 covering the zero-count parse path,
+  folded in). Claiming T7 (CLI genesys subcommand + notation reference +
+  README).
 
 - (reviewer seat, 2026-07-12 00:26) **T6 (827153183ced + e2949d999e18)
   REVIEW PASSED; follow-ups in 608651b7c911.** Gates green (343 tests
