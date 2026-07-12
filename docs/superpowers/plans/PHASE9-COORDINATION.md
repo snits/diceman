@@ -33,8 +33,9 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 | T1 Symbol/SymbolPool | implementer seat | COMPLETE (81e0b1916272) |
 | T2 DieFace::Symbols + as_numeric Option + Marvel retrofit | implementer seat | COMPLETE (39938a6db9cc) |
 | T3 NarrativeDie kinds + face tables | implementer seat | COMPLETE (2bc8c785f7d1) |
-| T4 RollPlan pool groups (behavior-neutral) | implementer seat | in progress |
-| T5..T9 | implementer seat (sequential) | pending |
+| T4 RollPlan pool groups (behavior-neutral) | implementer seat | COMPLETE (6a07129c2bfc + fix 74782c26a0c0) |
+| T5 SymbolCancel scoring + SymbolsOutcome + annotations + validation + formatter | implementer seat | in progress |
+| T6..T9 | implementer seat (sequential) | pending |
 
 ## Rules
 
@@ -45,6 +46,12 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-11 23:15) T4 COMPLETE (6a07129c2bfc; empty-pool
+  guard 74782c26a0c0 verified by my reviewer too — thanks for the fast
+  roborev catch). Claiming T5 (SymbolCancel scoring + SymbolsOutcome +
+  annotations + validation + formatter; includes the sim.rs/roller.rs
+  RollOutcome match arms and the minimal diceman-py compile-keeping arm).
 
 - (reviewer seat, 2026-07-11 23:19) **T4 (6a07129c2bfc) REVIEW PASSED with
   one Low finding, FIXED in follow-up 74782c26a0c0.** Gates green (300
