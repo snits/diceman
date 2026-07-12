@@ -25,7 +25,7 @@ pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutc
             let total = outcome.as_numeric().expect(
                 "Sum/CountSuccesses/DigitConcatenate scoring always yields a numeric outcome",
             );
-            match plan.scoring {
+            match plan.scoring() {
                 ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
                 ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
                     format_standard_roll(plan, dice, total)
@@ -66,13 +66,17 @@ fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome
     let modifiers = modifiers_str(plan);
     format!(
         "{}dMarvel{}[{}] = {}{}",
-        plan.pool.count, modifiers, dice_str, marvel.total, suffix
+        plan.pool().count,
+        modifiers,
+        dice_str,
+        marvel.total,
+        suffix
     )
 }
 
 /// Render the modifier portion of a roll notation (e.g., "kh3!p>4r<3").
 fn modifiers_str(plan: &RollPlan) -> String {
-    plan.modifiers
+    plan.modifiers()
         .iter()
         .map(|m| match m {
             RollModifier::KeepHighest(n) => format!("kh{}", n),
@@ -124,14 +128,15 @@ fn modifiers_str(plan: &RollPlan) -> String {
 /// Digit dice carry no modifiers or annotations from the parser, so dropped
 /// dice and crit markers do not arise here; values render plain.
 fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let sides = match plan.pool.kind {
+    let sides = match plan.pool().kind {
         DieKind::Number(n) => n.to_string(),
         // The parser only pairs DigitConcatenate with DieKind::Number.
         DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
             unreachable!("DigitConcatenate requires DieKind::Number")
         }
     };
-    let prefix = std::iter::repeat_n(sides.as_str(), plan.pool.count as usize).collect::<String>();
+    let prefix =
+        std::iter::repeat_n(sides.as_str(), plan.pool().count as usize).collect::<String>();
     let dice_str = dice
         .iter()
         .map(|d| d.face.to_string())
@@ -142,7 +147,7 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
 
 /// Format a standard (sum or success-counting) roll.
 fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let kind_str = match plan.pool.kind {
+    let kind_str = match plan.pool().kind {
         DieKind::Number(n) => n.to_string(),
         DieKind::Percent => "%".to_string(),
         DieKind::Fudge => "F".to_string(),
@@ -152,7 +157,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
     let mut modifiers: String = modifiers_str(plan);
 
     // Success-counting scoring renders its condition after the modifiers.
-    let success_condition: Option<&Condition> = match &plan.scoring {
+    let success_condition: Option<&Condition> = match plan.scoring() {
         ScoringMode::CountSuccesses(cond) => {
             modifiers.push_str(&format!("{}{}", cond.compare, cond.value));
             Some(cond)
@@ -165,8 +170,8 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
     // Render crit markers: cs before cf, at most one of each.
     let crit_str = format!(
         "{}{}",
-        crit_success_str(&plan.annotation_rules),
-        crit_failure_str(&plan.annotation_rules),
+        crit_success_str(plan.annotation_rules()),
+        crit_failure_str(plan.annotation_rules()),
     );
 
     // Format dice, marking crits and successes
@@ -199,12 +204,23 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         let success_word = if total == 1 { "success" } else { "successes" };
         format!(
             "{}d{}{}{}[{}] = {} {}",
-            plan.pool.count, kind_str, modifiers, crit_str, dice_str, total, success_word
+            plan.pool().count,
+            kind_str,
+            modifiers,
+            crit_str,
+            dice_str,
+            total,
+            success_word
         )
     } else {
         format!(
             "{}d{}{}{}[{}] = {}",
-            plan.pool.count, kind_str, modifiers, crit_str, dice_str, total
+            plan.pool().count,
+            kind_str,
+            modifiers,
+            crit_str,
+            dice_str,
+            total
         )
     }
 }

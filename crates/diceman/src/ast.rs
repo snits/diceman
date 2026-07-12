@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use crate::error::{Error, Result};
+
 /// A complete dice expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -33,13 +35,128 @@ pub struct DicePool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RollPlan {
     /// The dice pool to roll.
-    pub pool: DicePool,
+    pool: DicePool,
     /// Modifiers applied to the pool before scoring.
-    pub modifiers: Vec<RollModifier>,
+    modifiers: Vec<RollModifier>,
     /// How modified dice are converted to a final numeric result.
-    pub scoring: ScoringMode,
+    scoring: ScoringMode,
     /// Annotations detecting interesting outcomes (descriptive only).
-    pub annotation_rules: Vec<AnnotationRule>,
+    annotation_rules: Vec<AnnotationRule>,
+}
+
+impl RollPlan {
+    /// Build a `RollPlan`, validating the Marvel Multiverse invariant.
+    ///
+    /// A plan is Marvel exactly when its scoring is `MarvelMultiverse` and its
+    /// pool kind is `MarvelD6`; those two must agree. A Marvel plan must roll
+    /// exactly 3 dice, may only carry `Edge`/`Trouble` modifiers, and must
+    /// carry `annotation_rules` equal to exactly `[AnnotationRule::MarvelFantastic]`.
+    /// A non-Marvel plan may not carry `Edge`/`Trouble` modifiers or a
+    /// `MarvelFantastic` annotation, but critical-success/failure annotations
+    /// remain allowed.
+    pub fn new(
+        pool: DicePool,
+        modifiers: Vec<RollModifier>,
+        scoring: ScoringMode,
+        annotation_rules: Vec<AnnotationRule>,
+    ) -> Result<Self> {
+        let marvel_scoring = matches!(scoring, ScoringMode::MarvelMultiverse);
+        let marvel_kind = pool.kind == DieKind::MarvelD6;
+
+        if marvel_scoring != marvel_kind {
+            return Err(Error::InvalidMarvelRoll(format!(
+                "MarvelMultiverse scoring and MarvelD6 pool kind must be used together \
+                 (scoring is MarvelMultiverse: {marvel_scoring}, kind is MarvelD6: {marvel_kind})"
+            )));
+        }
+
+        if marvel_scoring {
+            if pool.count != 3 {
+                return Err(Error::InvalidMarvelRoll(format!(
+                    "expected 3 dice, found {}",
+                    pool.count
+                )));
+            }
+            for modifier in &modifiers {
+                if !matches!(
+                    modifier,
+                    RollModifier::Edge { .. } | RollModifier::Trouble { .. }
+                ) {
+                    return Err(Error::InvalidMarvelRoll(format!(
+                        "{modifier:?} is not supported on Marvel rolls; only Edge and Trouble"
+                    )));
+                }
+            }
+            if annotation_rules != [AnnotationRule::MarvelFantastic] {
+                return Err(Error::InvalidMarvelRoll(
+                    "Marvel rolls must carry exactly one MarvelFantastic annotation rule"
+                        .to_string(),
+                ));
+            }
+        } else {
+            for modifier in &modifiers {
+                if matches!(
+                    modifier,
+                    RollModifier::Edge { .. } | RollModifier::Trouble { .. }
+                ) {
+                    return Err(Error::InvalidMarvelRoll(format!(
+                        "{modifier:?} is only supported on Marvel rolls"
+                    )));
+                }
+            }
+            if annotation_rules.contains(&AnnotationRule::MarvelFantastic) {
+                return Err(Error::InvalidMarvelRoll(
+                    "MarvelFantastic annotation is only supported on Marvel rolls".to_string(),
+                ));
+            }
+        }
+
+        Ok(Self {
+            pool,
+            modifiers,
+            scoring,
+            annotation_rules,
+        })
+    }
+
+    /// Build a `RollPlan` without validating the Marvel Multiverse invariant.
+    ///
+    /// Bypasses the checks performed by `new`; callers must guarantee the
+    /// plan is already valid (e.g. the parser and roller, which validate
+    /// upstream before assembling the plan).
+    pub(crate) fn new_unchecked(
+        pool: DicePool,
+        modifiers: Vec<RollModifier>,
+        scoring: ScoringMode,
+        annotation_rules: Vec<AnnotationRule>,
+    ) -> Self {
+        Self {
+            pool,
+            modifiers,
+            scoring,
+            annotation_rules,
+        }
+    }
+
+    /// The dice pool to roll.
+    pub fn pool(&self) -> &DicePool {
+        &self.pool
+    }
+
+    /// Modifiers applied to the pool before scoring.
+    pub fn modifiers(&self) -> &[RollModifier] {
+        &self.modifiers
+    }
+
+    /// How modified dice are converted to a final numeric result.
+    pub fn scoring(&self) -> &ScoringMode {
+        &self.scoring
+    }
+
+    /// Annotations detecting interesting outcomes (descriptive only).
+    pub fn annotation_rules(&self) -> &[AnnotationRule] {
+        &self.annotation_rules
+    }
 }
 
 /// A modifier that transforms the dice pool before scoring.
@@ -370,5 +487,204 @@ mod tests {
     #[test]
     fn marvel_d6_has_six_faces() {
         assert_eq!(DieKind::MarvelD6.count(), 6);
+    }
+
+    fn marvel_pool() -> DicePool {
+        DicePool {
+            count: 3,
+            kind: DieKind::MarvelD6,
+        }
+    }
+
+    fn numeric_pool() -> DicePool {
+        DicePool {
+            count: 1,
+            kind: DieKind::Number(20),
+        }
+    }
+
+    #[test]
+    fn new_rejects_marvel_kind_with_non_marvel_scoring() {
+        let result = RollPlan::new(marvel_pool(), vec![], ScoringMode::Sum, vec![]);
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_marvel_scoring_with_non_marvel_kind() {
+        let result = RollPlan::new(
+            numeric_pool(),
+            vec![],
+            ScoringMode::MarvelMultiverse,
+            vec![],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_marvel_plan_with_wrong_pool_count() {
+        let pool = DicePool {
+            count: 5,
+            kind: DieKind::MarvelD6,
+        };
+        let result = RollPlan::new(
+            pool,
+            vec![],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_marvel_plan_with_non_edge_trouble_modifier() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![RollModifier::KeepHighest(1)],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_marvel_plan_with_empty_annotation_rules() {
+        let result = RollPlan::new(marvel_pool(), vec![], ScoringMode::MarvelMultiverse, vec![]);
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_marvel_plan_with_critical_annotation_only() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::CriticalSuccess(Condition {
+                compare: Compare::Equal,
+                value: 6,
+            })],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_marvel_plan_with_critical_annotation_alongside_fantastic() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![],
+            ScoringMode::MarvelMultiverse,
+            vec![
+                AnnotationRule::MarvelFantastic,
+                AnnotationRule::CriticalSuccess(Condition {
+                    compare: Compare::Equal,
+                    value: 6,
+                }),
+            ],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_non_marvel_plan_with_edge_modifier() {
+        let result = RollPlan::new(
+            numeric_pool(),
+            vec![RollModifier::Edge {
+                count: 1,
+                policy: EdgePolicy::RerollLowest,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_non_marvel_plan_with_marvel_fantastic_annotation() {
+        let result = RollPlan::new(
+            numeric_pool(),
+            vec![],
+            ScoringMode::Sum,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(matches!(result, Err(Error::InvalidMarvelRoll(_))));
+    }
+
+    #[test]
+    fn new_accepts_valid_marvel_plan_with_edge_modifier() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![RollModifier::Edge {
+                count: 1,
+                policy: EdgePolicy::RerollLowest,
+            }],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_accepts_valid_marvel_plan_with_trouble_and_edge_modifiers() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![
+                RollModifier::Edge {
+                    count: 1,
+                    policy: EdgePolicy::RerollLowest,
+                },
+                RollModifier::Trouble { count: 1 },
+            ],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_accepts_valid_marvel_plan_with_no_modifiers() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_accepts_valid_non_marvel_plan() {
+        let pool = DicePool {
+            count: 6,
+            kind: DieKind::Number(6),
+        };
+        let result = RollPlan::new(pool, vec![], ScoringMode::Sum, vec![]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_accepts_non_marvel_plan_with_critical_success_annotation() {
+        let pool = DicePool {
+            count: 1,
+            kind: DieKind::Number(20),
+        };
+        let result = RollPlan::new(
+            pool,
+            vec![],
+            ScoringMode::Sum,
+            vec![AnnotationRule::CriticalSuccess(Condition {
+                compare: Compare::Equal,
+                value: 20,
+            })],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_unchecked_builds_without_validation() {
+        // Deliberately invalid: MarvelD6 kind paired with Sum scoring.
+        let plan = RollPlan::new_unchecked(marvel_pool(), vec![], ScoringMode::Sum, vec![]);
+        assert_eq!(plan.pool(), &marvel_pool());
+        assert_eq!(plan.modifiers(), &[]);
+        assert_eq!(plan.scoring(), &ScoringMode::Sum);
+        assert_eq!(plan.annotation_rules(), &[]);
     }
 }
