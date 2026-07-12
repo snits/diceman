@@ -1123,6 +1123,98 @@ mod tests {
         assert_eq!(result.annotations, vec![Annotation::Triumph]);
     }
 
+    /// Evaluate a narrative plan and return its formatted expression.
+    fn narrative_expression(groups: &[(u32, NarrativeDie)], rolls: Vec<u32>) -> String {
+        let expr = narrative_plan(groups);
+        let mut rng = TestRng::new(rolls);
+        evaluate_with_rng(&expr, &mut rng).unwrap().expression
+    }
+
+    #[test]
+    fn narrative_formats_success_against_threat() {
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+                vec![4, 4],
+            ),
+            "1dAbility&1dDifficulty[SS | Th] = 2 successes, 1 threat"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_spec_worked_example() {
+        // Spec §2.9: faces S+A, A+A | Th ⇒ net 1 success, 2 advantages.
+        assert_eq!(
+            narrative_expression(
+                &[(2, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+                vec![7, 8, 4],
+            ),
+            "2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_triumph_and_despair() {
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Proficiency), (1, NarrativeDie::Challenge)],
+                vec![12, 12],
+            ),
+            "1dProficiency&1dChallenge[Tr | De] = 1 triumph, 1 despair"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_tie_as_wash() {
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+                vec![2, 2],
+            ),
+            "1dAbility&1dDifficulty[S | F] = wash"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_force_pips() {
+        assert_eq!(
+            narrative_expression(&[(1, NarrativeDie::Force)], vec![7]),
+            "1dForce[DkDk] = 2 dark"
+        );
+    }
+
+    #[test]
+    fn narrative_formats_blank_face_as_dash() {
+        // Boost roll 1 is a blank face; the roll nets to wash.
+        assert_eq!(
+            narrative_expression(&[(1, NarrativeDie::Boost)], vec![1]),
+            "1dBoost[-] = wash"
+        );
+    }
+
+    #[test]
+    fn narrative_roll_in_arithmetic_errors_non_numeric() {
+        // 1dAbility + 2: the narrative operand has no numeric value.
+        let expr = Expr::BinOp {
+            op: Op::Add,
+            left: Box::new(narrative_plan(&[(1, NarrativeDie::Ability)])),
+            right: Box::new(Expr::Number(2)),
+        };
+        let mut rng = TestRng::new(vec![4]);
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::NonNumericOutcome)));
+    }
+
+    #[test]
+    fn evaluate_total_over_narrative_errors_non_numeric() {
+        // The sim path (simulate_with_rng -> evaluate_total) rejects a
+        // narrative expression cleanly rather than scoring it.
+        let expr = narrative_plan(&[(1, NarrativeDie::Ability)]);
+        let mut rng = TestRng::new(vec![4]);
+        let result = evaluate_total(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::NonNumericOutcome)));
+    }
+
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
         Expr::Roll(RollPlan::new_unchecked(
