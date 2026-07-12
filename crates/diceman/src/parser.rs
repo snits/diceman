@@ -521,7 +521,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an explode modifier (!, !!, !p, !!p, !>5, !!p>5).
+    /// Parse an explode modifier (!, !!, !p, !!p, !2, !>5, !!p2>5).
     fn explode_modifier(&mut self) -> Result<RollModifier> {
         let compounding = if self.current == Token::Explode {
             self.advance()?;
@@ -537,12 +537,19 @@ impl<'a> Parser<'a> {
             false
         };
 
+        let limit = if let Token::Number(n) = self.current {
+            self.advance()?;
+            Some(n)
+        } else {
+            None
+        };
+
         let condition = self.optional_condition()?;
 
         Ok(RollModifier::Explode {
             compounding,
             penetrating,
-            limit: None,
+            limit,
             condition,
         })
     }
@@ -874,6 +881,53 @@ mod tests {
                     compounding: false,
                     penetrating: true,
                     limit: None,
+                    condition: Some(Condition {
+                        compare: Compare::GreaterThan,
+                        value: 4,
+                    }),
+                }],
+                ScoringMode::Sum,
+                vec![],
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_explode_limit() {
+        let expr = parse("1d6!1").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                vec![RollModifier::Explode {
+                    compounding: false,
+                    penetrating: false,
+                    limit: Some(1),
+                    condition: None,
+                }],
+                ScoringMode::Sum,
+                vec![],
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_compounding_penetrating_limit_condition() {
+        let expr = parse("1d6!!p2>4").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                vec![RollModifier::Explode {
+                    compounding: true,
+                    penetrating: true,
+                    limit: Some(2),
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
