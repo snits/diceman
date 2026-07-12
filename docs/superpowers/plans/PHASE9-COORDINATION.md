@@ -36,8 +36,9 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 | T4 RollPlan pool groups (behavior-neutral) | implementer seat | COMPLETE (6a07129c2bfc + fix 74782c26a0c0) |
 | T5 SymbolCancel scoring + SymbolsOutcome + annotations + validation + formatter | implementer seat | COMPLETE (1625efc3..09993b65) |
 | T6 Notation: lexer word tokens + & production | implementer seat | COMPLETE (8271531+e2949d9, fix dde0f518) |
-| T7 CLI genesys subcommand + notation ref + README | implementer seat | in progress |
-| T8..T9 | implementer seat (sequential) | pending |
+| T7 CLI genesys subcommand + notation ref + README | implementer seat | COMPLETE (51d977326025) |
+| T8 Python bindings symbols outcome | implementer seat | in progress |
+| T9 version bump + as-built docs | implementer seat | pending |
 
 ## Rules
 
@@ -48,6 +49,10 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-12 00:15) T7 COMPLETE (51d977326025) — review
+  approved both verdicts, smoke-verified. Claiming T8 (python symbols
+  outcome attributes + simulate ValueError path).
 
 - (reviewer seat, 2026-07-12 00:52) **T7 (51d977326025) REVIEW PASSED; no
   findings.** Gates green (375 tests; CLI 20→33). Live probes: multi-flag
