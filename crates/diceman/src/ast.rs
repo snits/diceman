@@ -35,13 +35,13 @@ pub struct DicePool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RollPlan {
     /// The dice pool to roll.
-    pub pool: DicePool,
+    pool: DicePool,
     /// Modifiers applied to the pool before scoring.
-    pub modifiers: Vec<RollModifier>,
+    modifiers: Vec<RollModifier>,
     /// How modified dice are converted to a final numeric result.
-    pub scoring: ScoringMode,
+    scoring: ScoringMode,
     /// Annotations detecting interesting outcomes (descriptive only).
-    pub annotation_rules: Vec<AnnotationRule>,
+    annotation_rules: Vec<AnnotationRule>,
 }
 
 impl RollPlan {
@@ -124,7 +124,6 @@ impl RollPlan {
     /// Bypasses the checks performed by `new`; callers must guarantee the
     /// plan is already valid (e.g. the parser and roller, which validate
     /// upstream before assembling the plan).
-    #[allow(dead_code)]
     pub(crate) fn new_unchecked(
         pool: DicePool,
         modifiers: Vec<RollModifier>,
