@@ -260,6 +260,173 @@ impl fmt::Display for DieFace {
     }
 }
 
+/// A narrative symbol that can appear on a die face.
+///
+/// `Success`/`Advantage`/`Triumph`/`Failure`/`Threat`/`Despair` are the
+/// Genesys/Star Wars narrative dice symbols; `Light`/`Dark` are the Star
+/// Wars Force die symbols; `Marvel` is the Marvel Multiverse M. These are
+/// two disjoint systems and pools from them are never merged in gameplay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Symbol {
+    Success,
+    Advantage,
+    Triumph,
+    Failure,
+    Threat,
+    Despair,
+    Light,
+    Dark,
+    Marvel,
+}
+
+impl Symbol {
+    /// Total number of `Symbol` variants; the size of `SymbolPool`'s count array.
+    const COUNT: usize = 9;
+
+    /// All symbol variants, in declaration order.
+    const ALL: [Symbol; Self::COUNT] = [
+        Symbol::Success,
+        Symbol::Advantage,
+        Symbol::Triumph,
+        Symbol::Failure,
+        Symbol::Threat,
+        Symbol::Despair,
+        Symbol::Light,
+        Symbol::Dark,
+        Symbol::Marvel,
+    ];
+
+    /// The `SymbolPool` count-array position for this symbol.
+    ///
+    /// Derived from the enum discriminant, which is the single source of
+    /// the `Symbol` -> array-index mapping; nothing else assigns positions.
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+// Verifies `ALL` agrees with `index()` at compile time: since `index()` is
+// itself derived from declaration order, this checks `ALL` was not
+// reordered or left out of sync when `Symbol` was last edited.
+const _: () = {
+    let mut i = 0;
+    while i < Symbol::COUNT {
+        assert!(Symbol::ALL[i] as usize == i);
+        i += 1;
+    }
+};
+
+/// A multiset of `Symbol`s on a die face, or aggregated across a pool.
+///
+/// `Copy`: a fixed-size count array indexed by `Symbol`. A Genesys blank
+/// face is `SymbolPool::new()` — a real face that rolled, with nothing on
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SymbolPool {
+    counts: [u8; Symbol::COUNT],
+}
+
+impl SymbolPool {
+    /// An empty pool (no symbols).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build a pool from a list of symbols, counting repeats.
+    pub fn of(symbols: &[Symbol]) -> Self {
+        let mut pool = Self::new();
+        for &s in symbols {
+            pool.add(s, 1);
+        }
+        pool
+    }
+
+    /// The count of `s` in this pool.
+    pub fn count(&self, s: Symbol) -> u8 {
+        self.counts[s.index()]
+    }
+
+    /// Add `n` of symbol `s` to this pool, saturating at `u8::MAX`.
+    ///
+    /// Saturation is a safety net, not a behavior any realistic pool (fewer
+    /// than a dozen dice, at most a couple of symbols per face) should reach.
+    pub fn add(&mut self, s: Symbol, n: u8) {
+        let idx = s.index();
+        self.counts[idx] = self.counts[idx].saturating_add(n);
+    }
+
+    /// Merge `other`'s counts into this pool, per-symbol, saturating at `u8::MAX`.
+    pub fn merge(&mut self, other: &SymbolPool) {
+        for i in 0..Symbol::COUNT {
+            self.counts[i] = self.counts[i].saturating_add(other.counts[i]);
+        }
+    }
+
+    /// True if this pool has at least one of `s`.
+    pub fn contains(&self, s: Symbol) -> bool {
+        self.count(s) != 0
+    }
+
+    /// True if this pool has no symbols at all.
+    pub fn is_empty(&self) -> bool {
+        self.counts.iter().all(|&c| c == 0)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for SymbolPool {
+    /// Serializes as a symbol name -> count map, omitting zero counts
+    /// (e.g. `{"Success":1,"Advantage":2}`), not the opaque positional
+    /// array the derive would emit. The JSON die-face shape is a public
+    /// CLI surface.
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(None)?;
+        for &s in Symbol::ALL.iter() {
+            let count = self.count(s);
+            if count != 0 {
+                map.serialize_entry(&s, &count)?;
+            }
+        }
+        map.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for SymbolPool {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct PoolVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for PoolVisitor {
+            type Value = SymbolPool;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map of symbol name to count")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut pool = SymbolPool::new();
+                while let Some((s, count)) = map.next_entry::<Symbol, u8>()? {
+                    pool.add(s, count);
+                }
+                Ok(pool)
+            }
+        }
+
+        deserializer.deserialize_map(PoolVisitor)
+    }
+}
+
 /// The final outcome of scoring a roll.
 ///
 /// `Numeric` covers summed and digit-concatenated results;
@@ -686,5 +853,115 @@ mod tests {
         assert_eq!(plan.modifiers(), &[]);
         assert_eq!(plan.scoring(), &ScoringMode::Sum);
         assert_eq!(plan.annotation_rules(), &[]);
+    }
+
+    #[test]
+    fn symbol_all_entries_sit_at_their_own_index() {
+        for (i, s) in Symbol::ALL.iter().enumerate() {
+            assert_eq!(s.index(), i, "Symbol::ALL is out of sync with index()");
+        }
+    }
+
+    #[test]
+    fn symbol_pool_round_trips_every_symbol() {
+        for &s in Symbol::ALL.iter() {
+            let pool = SymbolPool::of(&[s]);
+            assert_eq!(pool.count(s), 1);
+            for &other in Symbol::ALL.iter() {
+                if other != s {
+                    assert_eq!(pool.count(other), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn symbol_pool_of_counts_repeated_symbols() {
+        let pool = SymbolPool::of(&[Symbol::Success, Symbol::Success, Symbol::Advantage]);
+        assert_eq!(pool.count(Symbol::Success), 2);
+        assert_eq!(pool.count(Symbol::Advantage), 1);
+        assert_eq!(pool.count(Symbol::Triumph), 0);
+    }
+
+    #[test]
+    fn symbol_pool_new_is_empty_and_equals_default() {
+        let pool = SymbolPool::new();
+        assert!(pool.is_empty());
+        assert_eq!(pool, SymbolPool::default());
+        for &s in Symbol::ALL.iter() {
+            assert_eq!(pool.count(s), 0);
+            assert!(!pool.contains(s));
+        }
+    }
+
+    #[test]
+    fn symbol_pool_contains_reflects_nonzero_count() {
+        let pool = SymbolPool::of(&[Symbol::Threat]);
+        assert!(pool.contains(Symbol::Threat));
+        assert!(!pool.contains(Symbol::Despair));
+        assert!(!pool.is_empty());
+    }
+
+    #[test]
+    fn symbol_pool_add_saturates_at_u8_max() {
+        let mut pool = SymbolPool::new();
+        pool.add(Symbol::Light, u8::MAX);
+        pool.add(Symbol::Light, 1);
+        assert_eq!(pool.count(Symbol::Light), u8::MAX);
+    }
+
+    #[test]
+    fn symbol_pool_merge_sums_counts() {
+        let mut a = SymbolPool::of(&[Symbol::Success, Symbol::Advantage]);
+        let b = SymbolPool::of(&[Symbol::Success, Symbol::Failure]);
+        a.merge(&b);
+        assert_eq!(a.count(Symbol::Success), 2);
+        assert_eq!(a.count(Symbol::Advantage), 1);
+        assert_eq!(a.count(Symbol::Failure), 1);
+        assert_eq!(a.count(Symbol::Threat), 0);
+    }
+
+    #[test]
+    fn symbol_pool_merge_saturates_at_u8_max() {
+        let mut a = SymbolPool::new();
+        a.add(Symbol::Dark, u8::MAX);
+        let mut b = SymbolPool::new();
+        b.add(Symbol::Dark, 5);
+        a.merge(&b);
+        assert_eq!(a.count(Symbol::Dark), u8::MAX);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn symbol_pool_serializes_to_name_count_map_omitting_zeros() {
+        let pool = SymbolPool::of(&[Symbol::Success, Symbol::Success, Symbol::Threat]);
+        let json = serde_json::to_value(pool).unwrap();
+        assert_eq!(json, serde_json::json!({"Success": 2, "Threat": 1}));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn symbol_pool_empty_serializes_to_empty_map() {
+        let json = serde_json::to_value(SymbolPool::new()).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn symbol_pool_deserializes_from_name_count_map() {
+        let json = serde_json::json!({"Success": 2, "Threat": 1});
+        let pool: SymbolPool = serde_json::from_value(json).unwrap();
+        assert_eq!(pool.count(Symbol::Success), 2);
+        assert_eq!(pool.count(Symbol::Threat), 1);
+        assert_eq!(pool.count(Symbol::Advantage), 0);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn symbol_pool_serde_round_trips() {
+        let pool = SymbolPool::of(&[Symbol::Triumph, Symbol::Despair, Symbol::Despair]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let restored: SymbolPool = serde_json::from_str(&json).unwrap();
+        assert_eq!(pool, restored);
     }
 }
