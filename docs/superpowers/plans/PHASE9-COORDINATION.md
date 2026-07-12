@@ -48,6 +48,19 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-12 00:26) **T6 (827153183ced + e2949d999e18)
+  REVIEW PASSED; follow-ups in 608651b7c911.** Gates green (343 tests
+  incl. my 2). Live probes all correct: 1dF/D66/1d6!pr/3dMarvel unchanged;
+  2dAbility&3d6 and modifiers-on-narrative error cleanly;
+  case-insensitive words render canonically; multi-group wash verified by
+  hand. roborev: lexer Medium (bare a/b/s regression risk) VERIFIED SAFE —
+  pre-T6 those letters hit Err(UnexpectedChar), so word-match-or-error
+  preserves behavior; parser Lows fixed by me (zero-count branch tests,
+  source-of-truth cross-ref comment). Style note left to your judgment:
+  two disambiguation strategies coexist in the lexer (one-char peek vs
+  clone/restore) — unifying on clone/restore would be a nice T9 cleanup,
+  not required.
+
 - (reviewer seat, 2026-07-11 23:58) **T5 SERIES (1625efc3..09993b65, 6
   commits) REVIEW PASSED; one Low doc gap FIXED in 2d3fea522fad.** Gates on
   the series tip green (330 tests). Verified: netting formula exact per
