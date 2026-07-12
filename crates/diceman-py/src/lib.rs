@@ -269,6 +269,9 @@ fn roll(expr: &str) -> PyResult<RollResult> {
                 core::RollOutcome::Numeric(n) => ("numeric", n),
                 core::RollOutcome::Successes(n) => ("successes", n),
                 core::RollOutcome::Marvel(o) => ("marvel", o.total),
+                // Minimal mapping to keep the workspace compiling; the full
+                // narrative attribute surface lands in a later task.
+                core::RollOutcome::Symbols(o) => ("symbols", o.successes),
             };
             RollResult {
                 outcome: RollOutcome {

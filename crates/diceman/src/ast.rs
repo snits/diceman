@@ -280,6 +280,9 @@ pub enum ScoringMode {
     DigitConcatenate,
     /// Score a Marvel Multiverse 3dMarvel roll.
     MarvelMultiverse,
+    /// Merge all narrative symbol faces and cancel opposing symbols into a
+    /// `SymbolsOutcome` (Genesys/Star Wars narrative dice).
+    SymbolCancel,
 }
 
 /// A rule that detects an interesting outcome (descriptive only; no gameplay effect).
@@ -288,6 +291,10 @@ pub enum AnnotationRule {
     CriticalSuccess(Condition),
     CriticalFailure(Condition),
     MarvelFantastic,
+    /// A narrative roll produced at least one Triumph symbol.
+    Triumph,
+    /// A narrative roll produced at least one Despair symbol.
+    Despair,
 }
 
 /// The face value a die landed on.
@@ -539,13 +546,38 @@ impl<'de> serde::Deserialize<'de> for SymbolPool {
 ///
 /// `Numeric` covers summed and digit-concatenated results;
 /// `Successes` covers success-counting results;
-/// `Marvel` covers a Marvel Multiverse 3dMarvel roll.
+/// `Marvel` covers a Marvel Multiverse 3dMarvel roll;
+/// `Symbols` covers a narrative (Genesys/Star Wars) symbol-cancellation roll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RollOutcome {
     Numeric(i64),
     Successes(i64),
     Marvel(MarvelOutcome),
+    Symbols(SymbolsOutcome),
+}
+
+/// The scored outcome of a narrative (Genesys/Star Wars) symbol roll.
+///
+/// `successes` and `advantages` are signed nets: each Triumph adds a Success
+/// and each Despair adds a Failure to the success net, while the Triumph and
+/// Despair counts are reported uncancelled. Light and Dark are Force pips that
+/// never cancel and never enter the nets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SymbolsOutcome {
+    /// Net success: `(Success + Triumph) - (Failure + Despair)`; negative is net failure.
+    pub successes: i64,
+    /// Net advantage: `Advantage - Threat`; negative is net threat.
+    pub advantages: i64,
+    /// Number of Triumph symbols, reported regardless of cancellation.
+    pub triumphs: u8,
+    /// Number of Despair symbols, reported regardless of cancellation.
+    pub despairs: u8,
+    /// Number of Light Force pips.
+    pub light: u8,
+    /// Number of Dark Force pips.
+    pub dark: u8,
 }
 
 /// The scored outcome of a Marvel Multiverse 3dMarvel roll.
@@ -569,12 +601,13 @@ impl RollOutcome {
     ///
     /// `Some` for variants with a numeric value: `Successes` yields the
     /// count, `Marvel` yields the total (lenient extraction consistent with
-    /// arithmetic coercion). `None` is reserved for future non-numeric
-    /// (e.g. symbolic) outcomes that have no arithmetic meaning.
+    /// arithmetic coercion). `Symbols` returns `None`: a narrative outcome has
+    /// no single arithmetic value, so it cannot take part in arithmetic.
     pub fn as_numeric(self) -> Option<i64> {
         match self {
             RollOutcome::Numeric(n) | RollOutcome::Successes(n) => Some(n),
             RollOutcome::Marvel(o) => Some(o.total),
+            RollOutcome::Symbols(_) => None,
         }
     }
 }
@@ -633,6 +666,10 @@ pub enum Annotation {
     Fantastic,
     /// The Marvel roll was raw `1 / M / 1` (auto-fail regardless of target).
     AutoFail,
+    /// A narrative roll produced at least one Triumph symbol.
+    Triumph,
+    /// A narrative roll produced at least one Despair symbol.
+    Despair,
 }
 
 /// The type of dice to roll.
@@ -756,6 +793,22 @@ impl NarrativeDie {
             },
         };
         SymbolPool::of(symbols)
+    }
+}
+
+impl fmt::Display for NarrativeDie {
+    /// The full-word die name used in narrative notation (`Ability`, `Force`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            NarrativeDie::Boost => "Boost",
+            NarrativeDie::Setback => "Setback",
+            NarrativeDie::Ability => "Ability",
+            NarrativeDie::Difficulty => "Difficulty",
+            NarrativeDie::Proficiency => "Proficiency",
+            NarrativeDie::Challenge => "Challenge",
+            NarrativeDie::Force => "Force",
+        };
+        f.write_str(name)
     }
 }
 
