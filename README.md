@@ -128,6 +128,17 @@ All explode modifiers support conditions:
 - `1d6!p` - HackMaster penetrating (natural [6, 6, 4] shown as [6, 5, 3] = 14)
 - `1d10!>=8` - Explode on 8, 9, or 10
 
+Explosions can be capped with a bare number after the marker(s):
+
+| Notation | Meaning |
+|----------|---------|
+| `1d6!1` | Explode at most once (e.g. Kal-Arath) |
+| `1d6!!2` | Compounding, at most twice |
+| `1d6!p1` | Penetrating, at most once |
+| `1d6!2>4` | At most twice, on rolls greater than 4 |
+
+Without a number, explosions are unlimited (bounded only by an internal safety guard).
+
 ### Reroll
 
 | Notation | Description |
