@@ -140,11 +140,15 @@ d616 pool IS the Marvel die — it has an M face; the outer dice don't).
   auto-fail — unchanged pool-contextual logic, keyed off face identity.
 - **Behavior invariance, stated precisely:** all runtime verdicts (totals,
   auto_fail, m_shown, Edge/Trouble selection, every exhaustive-enumeration
-  distribution oracle at roller.rs:2175-2249) are preserved. Two
+  distribution oracle at roller.rs:2175-2249) are preserved. Five
   representation-level assertions change and must be updated, not deleted:
-  roller.rs:2164 (`dice[1].face == Numeric(1)` ⇒ the M face) and the history
-  oracles at roller.rs:2136 and 2166-2168 (`Numeric(1)` literals for the
-  middle die ⇒ M faces).
+  roller.rs:2164 (`dice[1].face == Numeric(1)` ⇒ the M face), the history
+  oracles at roller.rs:2166-2168 (`Numeric(1)` literals for the middle die ⇒
+  M faces), and the three ChaseFantastic tests asserting the shown M via
+  `as_numeric() == 1` (roller.rs:2402, 2421, 2441). The `as_numeric -> Option`
+  signature change additionally forces mechanical `Some(_)`/`.unwrap()`
+  compile fixes at numeric-face test assertions — compile adjustments, not
+  oracle changes.
   JSON die-face shape for the M face changes accordingly — breaking, flagged.
 - `MarvelOutcome`, `MarvelCheck`, Edge/Trouble notation, and typed Marvel APIs
   are unchanged.
@@ -420,7 +424,8 @@ Core bumps to v0.5.0; workspace crates follow. Breaking surface:
     (implicit S/F net out; the symbols survive and never cancel each other);
   - Triumph + four Failures → `successes: -3, triumphs: 1`.
 - Marvel regression: exhaustive-enumeration distribution oracles pass
-  unchanged; the two representation-level tests (roller.rs:2164, 2166-2168)
+  unchanged; the five representation-level tests (roller.rs:2164, 2166-2168,
+  2402, 2421, 2441)
   updated to the M face per §2.3; rerolled-M (Edge reroll landing on middle-die
   1) asserted as the M face in face AND history.
 - Arithmetic seam: `2dAbility + 2`, `(1dBoost) * 2`, `sim` over narrative —
