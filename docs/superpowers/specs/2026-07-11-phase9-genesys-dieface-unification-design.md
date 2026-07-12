@@ -345,7 +345,10 @@ Semantics:
   `F` Failure, `Th` Threat, `De` Despair, `L` Light, `Dk` Dark, `M` Marvel;
   blank face renders `-`.
 - Narrative roll rendering:
-  `2dAbility&1dDifficulty[S, SA | Th] = 1 success, 1 advantage, 1 threat`
+  `2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages`
+  (faces S+A, A+A | Th ⇒ S=1, A=3, T=1 ⇒ net successes 1, net advantages 2;
+  note the group-2 Threat cancelling a group-1 Advantage, and that the two
+  sides of one signed axis can never both render)
   — groups separated by ` | ` in pool order; outcome as a comma list of net
   facts (`N success(es)`/`N failure(s)` from the signed net, same for
   advantage/threat, plus `N triumph(s)` / `N despair(s)` / `N light` /
