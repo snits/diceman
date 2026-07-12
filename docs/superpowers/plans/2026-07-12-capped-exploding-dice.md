@@ -148,20 +148,27 @@ Assisted-by: Claude:claude-opus-4-8"
 
 - [ ] **Step 1: Write failing tests**
 
-Add to the `parser.rs` test module:
+Existing parser tests (see `parser.rs:794` `test_parse_explode`) assert the whole
+`Expr::Roll(RollPlan::new_unchecked(DicePool { count, kind: DieKind::Number(6) }, vec![..modifiers..], ScoringMode::Sum, vec![]))`.
+Mirror that exact shape. Add to the `parser.rs` test module:
 
 ```rust
     #[test]
     fn test_parse_explode_limit() {
         let expr = parse("1d6!1").unwrap();
         assert_eq!(
-            modifiers_of(&expr),
-            &vec![RollModifier::Explode {
-                compounding: false,
-                penetrating: false,
-                limit: Some(1),
-                condition: None,
-            }]
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool { count: 1, kind: DieKind::Number(6) },
+                vec![RollModifier::Explode {
+                    compounding: false,
+                    penetrating: false,
+                    limit: Some(1),
+                    condition: None,
+                }],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -169,35 +176,28 @@ Add to the `parser.rs` test module:
     fn test_parse_compounding_penetrating_limit_condition() {
         let expr = parse("1d6!!p2>4").unwrap();
         assert_eq!(
-            modifiers_of(&expr),
-            &vec![RollModifier::Explode {
-                compounding: true,
-                penetrating: true,
-                limit: Some(2),
-                condition: Some(Condition {
-                    compare: Compare::GreaterThan,
-                    value: 4,
-                }),
-            }]
-        );
-    }
-
-    #[test]
-    fn test_parse_explode_no_limit_is_none() {
-        let expr = parse("1d6!").unwrap();
-        assert_eq!(
-            modifiers_of(&expr),
-            &vec![RollModifier::Explode {
-                compounding: false,
-                penetrating: false,
-                limit: None,
-                condition: None,
-            }]
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool { count: 1, kind: DieKind::Number(6) },
+                vec![RollModifier::Explode {
+                    compounding: true,
+                    penetrating: true,
+                    limit: Some(2),
+                    condition: Some(Condition {
+                        compare: Compare::GreaterThan,
+                        value: 4,
+                    }),
+                }],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 ```
 
-Note: reuse whatever helper the existing explode parser tests use to reach the modifier list (the tests at `parser.rs:794+` show the exact pattern — mirror it; `modifiers_of` above is a placeholder for that existing access pattern). If existing tests destructure `expr` inline instead of via a helper, do the same here.
+(No separate `limit: None` parse test is needed here — the existing `test_parse_explode` already asserts `1d6!` and Task 1 updated it to include `limit: None`.)
+
+Note: `Token::Number` carries a `u32`, so `limit: Some(n)` needs no cast.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -243,7 +243,7 @@ In `crates/diceman/src/parser.rs`, update `explode_modifier` to read the optiona
     }
 ```
 
-Note: `Token::Number(n)` — confirm `n`'s integer type matches `u32` for `limit`; if the token carries a wider type, cast with `n as u32` (mirror how keep/drop counts are read elsewhere in this file).
+Note: `Token::Number(u32)` matches `limit: Option<u32>` directly — no cast needed.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -276,73 +276,82 @@ Assisted-by: Claude:claude-opus-4-8"
 
 - [ ] **Step 1: Write failing tests**
 
-Add to the `roller.rs` test module (mirror the existing explode tests' `TestRng` construction pattern — the tests at `roller.rs:1528+` show it exactly):
+Existing roller tests (see `roller.rs:1528` `test_evaluate_penetrating_explode`) build a
+`RollPlan::new_unchecked(DicePool { count, kind: DieKind::Number(6) }, vec![..], ScoringMode::Sum, vec![])`,
+wrap it in `Expr::Roll(plan)`, roll with `evaluate_with_rng(&expr, &mut TestRng::new(vec![..]))`,
+and assert `result.outcome == RollOutcome::Numeric(N)`. The summed outcome proves the cap:
+with an all-max `TestRng`, an *uncapped* chain would run to `MAX_EXPLOSIONS` and error, so a
+finite `Numeric` total is itself evidence the cap stopped the chain quietly. Mirror that shape:
 
 ```rust
     #[test]
     fn test_evaluate_standard_explode_limit_once() {
-        // 1d6!1 with TestRng always returning 6: initial 6 explodes ONCE into a
-        // new die, then stops at the cap — no error, two dice total.
-        let mut roller = Roller::new(TestRng::new(vec![6, 6, 6, 6]));
-        let dice = roller
-            .evaluate_roll(
-                &Roll { count: 1, kind: DieKind::Numeric(6) },
-                &vec![RollModifier::Explode {
-                    compounding: false,
-                    penetrating: false,
-                    limit: Some(1),
-                    condition: None,
-                }],
-            )
-            .unwrap();
-        assert_eq!(dice.len(), 2);
+        // 1d6!1, TestRng all 6: initial 6 explodes ONCE into a new 6, then the
+        // cap stops the chain quietly. Sum = 6 + 6 = 12, no error.
+        let plan = RollPlan::new_unchecked(
+            DicePool { count: 1, kind: DieKind::Number(6) },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(1),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(12));
     }
 
     #[test]
     fn test_evaluate_compounding_explode_limit_two() {
-        // 1d6!!2 with TestRng always 6: compound exactly twice → 6+6+6 = 18, no error.
-        let mut roller = Roller::new(TestRng::new(vec![6, 6, 6, 6]));
-        let dice = roller
-            .evaluate_roll(
-                &Roll { count: 1, kind: DieKind::Numeric(6) },
-                &vec![RollModifier::Explode {
-                    compounding: true,
-                    penetrating: false,
-                    limit: Some(2),
-                    condition: None,
-                }],
-            )
-            .unwrap();
-        assert_eq!(dice.len(), 1);
-        assert_eq!(dice[0].face.numeric_value(), 18);
+        // 1d6!!2, TestRng all 6: compound exactly twice → 6 + 6 + 6 = 18, no error.
+        let plan = RollPlan::new_unchecked(
+            DicePool { count: 1, kind: DieKind::Number(6) },
+            vec![RollModifier::Explode {
+                compounding: true,
+                penetrating: false,
+                limit: Some(2),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(18));
     }
 
     #[test]
     fn test_evaluate_explode_limit_zero_no_explosion() {
-        // 1d6!0 → cap 0 → no explosion, single die with its natural face.
-        let mut roller = Roller::new(TestRng::new(vec![6, 6]));
-        let dice = roller
-            .evaluate_roll(
-                &Roll { count: 1, kind: DieKind::Numeric(6) },
-                &vec![RollModifier::Explode {
-                    compounding: false,
-                    penetrating: false,
-                    limit: Some(0),
-                    condition: None,
-                }],
-            )
-            .unwrap();
-        assert_eq!(dice.len(), 1);
-        assert_eq!(dice[0].face.numeric_value(), 6);
+        // 1d6!0 → cap 0 → no explosion. Sum = the single natural face = 6.
+        let plan = RollPlan::new_unchecked(
+            DicePool { count: 1, kind: DieKind::Number(6) },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(0),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(6));
     }
 ```
 
-Note: match the exact constructor/method names the existing roller tests use (`Roller::new`, `TestRng::new`, `evaluate_roll`, `Roll { .. }`, `DieKind::Numeric`, `face.numeric_value()`). If the existing tests use different names or a helper, mirror those instead — do not invent names.
+Note: use the real names from the existing roller tests (`RollPlan::new_unchecked`, `DicePool`, `DieKind::Number`, `ScoringMode::Sum`, `Expr::Roll`, `evaluate_with_rng`, `RollOutcome::Numeric`, `TestRng::new`) — do not invent names.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo build -p diceman --tests 2>&1 | tail`
-Expected: FAIL — `apply_explode` does not take a `limit` argument yet, so the crate does not compile (the phase-dispatch call still passes the old arg list). This confirms the new signature is required.
+Run: `cargo test -p diceman explode_limit 2>&1 | tail -20`
+Expected: FAIL by panic — the roller still ignores `limit` (Task 1 left the call site binding it as `limit: _`), so the all-max `TestRng` drives an uncapped chain into the `MAX_EXPLOSIONS` guard, which returns `Err(ExplodeLimit)` and makes `.unwrap()` panic. (The tests compile; they fail at runtime, which is the red.)
 
 - [ ] **Step 3: Thread `limit` through the call site**
 
@@ -420,48 +429,54 @@ Assisted-by: Claude:claude-opus-4-8"
 
 **Files:**
 - Modify: `crates/diceman/src/format.rs:165-181`
-- Test: `crates/diceman/src/format.rs` (test module) or `parser.rs` round-trip tests — use whichever file already houses format round-trip tests.
+- Test: `crates/diceman/src/roller.rs` test module (the notation string is reconstructed via `modifiers_str` and surfaces on `RollResult.expression`, so a parse→roll→inspect-string round-trip is the natural test and needs no access to the private formatter).
 
 **Interfaces:**
 - Consumes: `RollModifier::Explode { .., limit, .. }`.
 
 - [ ] **Step 1: Write failing round-trip tests**
 
-Locate the existing format/round-trip tests (search: `grep -rn "fn test.*format\|round" crates/diceman/src/format.rs`). Add tests that format a known AST and/or assert parse→format→parse stability:
+`format_standard_roll` builds the notation prefix from `modifiers_str(plan)`, and that
+prefix appears at the start of `RollResult.expression` (e.g. `1d6!1[6, 6] = 12`). So parse
+the capped notation, roll it, and assert the rendered expression begins with the same
+notation. Add to the `roller.rs` test module:
 
 ```rust
     #[test]
-    fn test_format_explode_limit() {
-        let m = RollModifier::Explode {
-            compounding: false,
-            penetrating: false,
-            limit: Some(1),
-            condition: None,
-        };
-        assert_eq!(format_modifier(&m), "!1");
+    fn test_format_roundtrip_explode_limit() {
+        let expr = parse("1d6!1").unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(
+            result.expression.starts_with("1d6!1"),
+            "expected expression to start with 1d6!1, got: {}",
+            result.expression
+        );
     }
 
     #[test]
-    fn test_format_explode_limit_full() {
-        let m = RollModifier::Explode {
-            compounding: true,
-            penetrating: true,
-            limit: Some(2),
-            condition: Some(Condition {
-                compare: Compare::GreaterThan,
-                value: 4,
-            }),
-        };
-        assert_eq!(format_modifier(&m), "!!p2>4");
+    fn test_format_roundtrip_explode_limit_full() {
+        let expr = parse("1d6!!p2>4").unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(
+            result.expression.starts_with("1d6!!p2>4"),
+            "expected expression to start with 1d6!!p2>4, got: {}",
+            result.expression
+        );
     }
 ```
 
-Note: `format_modifier` is a placeholder — call the actual formatting entry point these tests already use (the closure at `format.rs:160` is inside a larger function; find the public/test-reachable formatter the existing modifier tests exercise and mirror it). If the codebase only tests formatting via full-expression round-trip (`parse(s).format() == s`), write these as round-trip assertions on `"1d6!1"` and `"1d6!!p2>4"` instead.
+Note: `parse` and `evaluate_with_rng` are the same helpers the surrounding roller tests use;
+confirm `parse` is in scope in this test module (it is used by other tests in the file). If
+`parse` is not imported in `roller.rs`'s test module, place these two tests in `parser.rs`'s
+test module instead, where `parse` is already in scope, and import `evaluate_with_rng`/`TestRng`
+the same way the roller tests do.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p diceman format 2>&1 | tail -20`
-Expected: FAIL — output omits the limit (e.g. `!` instead of `!1`, `!!p>4` instead of `!!p2>4`).
+Run: `cargo test -p diceman roundtrip_explode_limit 2>&1 | tail -20`
+Expected: FAIL — the rendered expression omits the cap (`1d6![...]` instead of `1d6!1[...]`, and `1d6!!p>4[...]` instead of `1d6!!p2>4[...]`), so `starts_with` is false.
 
 - [ ] **Step 3: Render the limit**
 
@@ -569,4 +584,4 @@ Assisted-by: Claude:claude-opus-4-8"
 
 - **Spec coverage:** AST field (T1), notation/parse (T2), roller cap + quiet-stop-vs-error distinction (T3), format round-trip (T4), README + CLI docs (T5), edge cases `!0` and `limit: None` (T3 tests + T1 regression). All spec sections mapped.
 - **Type consistency:** field order `compounding, penetrating, limit, condition` used in every task. `apply_explode` signature adds `limit: Option<u32>` in the position matching the call site in T3.
-- **Known placeholders to resolve during execution:** test helper/constructor names (`modifiers_of`, `format_modifier`, `TestRng`/`Roller` construction) are flagged in-task to be matched against the actual existing test patterns rather than invented. `Token::Number` integer width to be confirmed for the `u32` cast.
+- **Real patterns confirmed (no placeholders):** parser/roller tests assert full `Expr::Roll(RollPlan::new_unchecked(DicePool { count, kind: DieKind::Number(n) }, vec![..], ScoringMode::Sum, vec![]))`; roller behavior is checked via `evaluate_with_rng(&expr, &mut TestRng::new(..))` and `result.outcome == RollOutcome::Numeric(N)`; format is checked via `result.expression.starts_with(..)`. `Token::Number` is `u32` (no cast). `format.rs` has no test module — format tests live in the roller/parser test module.
