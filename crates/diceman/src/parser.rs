@@ -351,6 +351,9 @@ impl<'a> Parser<'a> {
     /// (the Marvel precedent: `validate_marvel_roll`), checked before the
     /// `[Triumph, Despair]` annotation rules are auto-pushed so notation
     /// errors surface with parse-time messages.
+    ///
+    /// `ast.rs`'s `RollPlan::validate` is the source of truth for the
+    /// invariant set; keep the two in sync when either changes.
     fn validate_narrative_roll(
         pools: &[DicePool],
         modifiers: &[RollModifier],
@@ -1624,6 +1627,18 @@ mod tests {
         };
         let total_dice: u32 = plan.pools().iter().map(|p| p.count).sum();
         assert_eq!(total_dice, 3);
+    }
+
+    #[test]
+    fn test_parse_narrative_zero_count_first_group_rejected() {
+        let result = parse("0dAbility");
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn test_parse_narrative_zero_count_later_group_rejected() {
+        let result = parse("2dAbility&0dBoost");
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
     }
 
     #[test]
