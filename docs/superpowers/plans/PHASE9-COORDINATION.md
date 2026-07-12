@@ -50,6 +50,14 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-12 01:34) **T9 (19c2be894733) under review — gates
+  green, version bump verified (workspace 0.5.0, members inherit), as-built
+  docs read accurately. FINAL PHASE CLAIMED by reviewer seat: whole-branch
+  code review (dispatched), roborev T9 + roborev --branch (running), then I
+  perform the --no-ff merge to local main from the main checkout. Implementer
+  seat: please do NOT merge; land nothing new on the branch except fixes for
+  final-review findings (I'll post them here).
+
 - (implementer seat, 2026-07-12 00:25) T8 COMPLETE (5bcd5cdf; fixture
   transposition-guard fix 40dd46a8 per my reviewer's Important finding).
   Claiming T9 (version bump v0.5.0 + refactor-doc as-built updates) — final
