@@ -153,8 +153,6 @@ pub(crate) fn evaluate_total(expr: &Expr, rng: &mut impl Rng) -> Result<i64> {
         rng,
         total_only: true,
     };
-    // Every current RollOutcome variant is numeric, so this `ok_or` is
-    // unreachable until a symbolic outcome lands (Phase 9, bead diceman-dqh).
     evaluator
         .evaluate(expr)?
         .outcome
@@ -244,7 +242,7 @@ pub fn roll_marvel_with_rng(
     let result = evaluate_with_rng(&expr, rng)?;
     let outcome = match result.outcome {
         RollOutcome::Marvel(o) => o,
-        RollOutcome::Numeric(_) | RollOutcome::Successes(_) => {
+        RollOutcome::Numeric(_) | RollOutcome::Successes(_) | RollOutcome::Symbols(_) => {
             return Err(Error::InvalidMarvelRoll(
                 "Marvel plan produced a non-Marvel outcome".to_string(),
             ));
@@ -301,9 +299,6 @@ impl<R: Rng> Evaluator<'_, R> {
             Expr::BinOp { op, left, right } => {
                 let left_result = self.evaluate(left)?;
                 let right_result = self.evaluate(right)?;
-                // Every current RollOutcome variant is numeric, so these
-                // `ok_or` calls are unreachable until a symbolic outcome
-                // lands (Phase 9, bead diceman-dqh).
                 let left = left_result
                     .outcome
                     .as_numeric()
@@ -613,6 +608,23 @@ impl<R: Rng> Evaluator<'_, R> {
                     .filter(|d| !d.dropped)
                     .fold(0i64, |acc, d| acc * 10 + d.face.numeric_value()),
             ),
+            ScoringMode::SymbolCancel => {
+                let merged = Self::merge_symbol_faces(dice);
+                let s = merged.count(Symbol::Success) as i64;
+                let a = merged.count(Symbol::Advantage) as i64;
+                let tr = merged.count(Symbol::Triumph);
+                let f = merged.count(Symbol::Failure) as i64;
+                let th = merged.count(Symbol::Threat) as i64;
+                let de = merged.count(Symbol::Despair);
+                RollOutcome::Symbols(crate::ast::SymbolsOutcome {
+                    successes: (s + tr as i64) - (f + de as i64),
+                    advantages: a - th,
+                    triumphs: tr,
+                    despairs: de,
+                    light: merged.count(Symbol::Light),
+                    dark: merged.count(Symbol::Dark),
+                })
+            }
             ScoringMode::MarvelMultiverse => {
                 // Contract: 3 dice, index 1 = the Marvel die (its M face is
                 // the only symbol face a Marvel pool can produce); the outer
@@ -649,6 +661,21 @@ impl<R: Rng> Evaluator<'_, R> {
         };
 
         Ok(outcome)
+    }
+
+    /// Merge every non-dropped die's symbol face into one pool.
+    ///
+    /// Narrative pools have no drop-producing modifiers, so the `!dropped`
+    /// filter is a no-op there; it mirrors the other scoring arms. Numeric
+    /// faces carry no symbols and contribute nothing.
+    fn merge_symbol_faces(dice: &[DieResult]) -> SymbolPool {
+        let mut merged = SymbolPool::new();
+        for die in dice.iter().filter(|d| !d.dropped) {
+            if let DieFace::Symbols(pool) = die.face {
+                merged.merge(&pool);
+            }
+        }
+        merged
     }
 
     /// Derive the Marvel Multiverse facts from the dice.
@@ -906,8 +933,148 @@ impl<R: Rng> Evaluator<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{DicePool, NarrativeDie};
+    use crate::ast::{DicePool, NarrativeDie, SymbolsOutcome};
     use crate::test_support::TestRng;
+
+    /// Build an unchecked narrative `RollPlan` from `(count, die)` groups.
+    fn narrative_plan(groups: &[(u32, NarrativeDie)]) -> Expr {
+        let pools = groups
+            .iter()
+            .map(|&(count, die)| DicePool {
+                count,
+                kind: DieKind::Narrative(die),
+            })
+            .collect();
+        Expr::Roll(RollPlan::new_unchecked_pools(
+            pools,
+            vec![],
+            ScoringMode::SymbolCancel,
+            vec![AnnotationRule::Triumph, AnnotationRule::Despair],
+        ))
+    }
+
+    /// Evaluate a narrative plan and return its `SymbolsOutcome`.
+    fn narrative_outcome(groups: &[(u32, NarrativeDie)], rolls: Vec<u32>) -> SymbolsOutcome {
+        let expr = narrative_plan(groups);
+        let mut rng = TestRng::new(rolls);
+        match evaluate_with_rng(&expr, &mut rng).unwrap().outcome {
+            RollOutcome::Symbols(o) => o,
+            other => panic!("expected Symbols outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn symbol_cancel_nets_success_against_threat() {
+        // Ability roll 4 = SS, Difficulty roll 4 = Th.
+        let o = narrative_outcome(
+            &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+            vec![4, 4],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 2,
+                advantages: -1,
+                triumphs: 0,
+                despairs: 0,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_reports_triumph_and_despair_uncancelled() {
+        // Proficiency roll 12 = Tr, Challenge roll 12 = De. Triumph's implicit
+        // success and Despair's implicit failure cancel to net 0, but the
+        // Triumph and Despair counts survive.
+        let o = narrative_outcome(
+            &[(1, NarrativeDie::Proficiency), (1, NarrativeDie::Challenge)],
+            vec![12, 12],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 0,
+                advantages: 0,
+                triumphs: 1,
+                despairs: 1,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_triumph_success_can_be_outvoted() {
+        // Proficiency roll 12 = Tr (implicit +1 success), Difficulty roll 2 = F,
+        // Setback roll 3 = F. Net successes (0 + 1) - (2 + 0) = -1; Triumph
+        // symbol still reported.
+        let o = narrative_outcome(
+            &[
+                (1, NarrativeDie::Proficiency),
+                (1, NarrativeDie::Difficulty),
+                (1, NarrativeDie::Setback),
+            ],
+            vec![12, 2, 3],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: -1,
+                advantages: 0,
+                triumphs: 1,
+                despairs: 0,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_tie_is_all_zero() {
+        // Ability roll 2 = S, Difficulty roll 2 = F.
+        let o = narrative_outcome(
+            &[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)],
+            vec![2, 2],
+        );
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 0,
+                advantages: 0,
+                triumphs: 0,
+                despairs: 0,
+                light: 0,
+                dark: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn symbol_cancel_force_pips_never_enter_nets() {
+        // Force roll 7 = Dk Dk. Dark pips reported; nets stay zero.
+        let o = narrative_outcome(&[(1, NarrativeDie::Force)], vec![7]);
+        assert_eq!(
+            o,
+            SymbolsOutcome {
+                successes: 0,
+                advantages: 0,
+                triumphs: 0,
+                despairs: 0,
+                light: 0,
+                dark: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn narrative_outcome_is_not_numeric() {
+        let expr = narrative_plan(&[(1, NarrativeDie::Ability)]);
+        let mut rng = TestRng::new(vec![4]);
+        let outcome = evaluate_with_rng(&expr, &mut rng).unwrap().outcome;
+        assert_eq!(outcome.as_numeric(), None);
+    }
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
