@@ -58,6 +58,22 @@ pub enum Token {
     Edge,
     /// Trouble modifier: 't' (Marvel reroll highest, keep worse by rank).
     Trouble,
+    /// Pool-union operator for narrative rolls: '&'.
+    Ampersand,
+    /// 'Ability' narrative die word.
+    Ability,
+    /// 'Boost' narrative die word.
+    Boost,
+    /// 'Setback' narrative die word.
+    Setback,
+    /// 'Difficulty' narrative die word.
+    Difficulty,
+    /// 'Proficiency' narrative die word.
+    Proficiency,
+    /// 'Challenge' narrative die word.
+    Challenge,
+    /// 'Force' narrative die word.
+    Force,
     /// End of input.
     Eof,
 }
@@ -112,18 +128,39 @@ impl<'a> Lexer<'a> {
                 Ok(Token::D)
             }
             'D' => {
-                self.chars.next();
-                Ok(Token::DigitD)
+                if self
+                    .peek_next()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&'i'))
+                {
+                    self.word("difficulty", Token::Difficulty)
+                } else {
+                    self.chars.next();
+                    Ok(Token::DigitD)
+                }
             }
             '%' => {
                 self.chars.next();
                 Ok(Token::Percent)
             }
             'F' | 'f' => {
-                self.chars.next();
-                Ok(Token::Fudge)
+                if self
+                    .peek_next()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&'o'))
+                {
+                    self.word("force", Token::Force)
+                } else {
+                    self.chars.next();
+                    Ok(Token::Fudge)
+                }
             }
             'm' | 'M' => self.word("marvel", Token::Marvel),
+            'a' | 'A' => self.word("ability", Token::Ability),
+            'b' | 'B' => self.word("boost", Token::Boost),
+            's' | 'S' => self.word("setback", Token::Setback),
+            '&' => {
+                self.chars.next();
+                Ok(Token::Ampersand)
+            }
             'e' | 'E' => {
                 self.chars.next();
                 Ok(Token::Edge)
@@ -180,26 +217,30 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(Token::O)
             }
-            'p' | 'P' => {
-                self.chars.next();
-                Ok(Token::P)
-            }
+            'p' | 'P' => self.word_or_fallback("roficiency", Token::Proficiency, Token::P),
             'c' | 'C' => {
-                self.chars.next(); // consume 'c'
-                if let Some(&(next_pos, next_ch)) = self.chars.peek() {
-                    match next_ch {
-                        's' | 'S' => {
-                            self.chars.next();
-                            Ok(Token::CritSuccess)
-                        }
-                        'f' | 'F' => {
-                            self.chars.next();
-                            Ok(Token::CritFail)
-                        }
-                        _ => Err(Error::UnexpectedChar(next_ch, next_pos)),
-                    }
+                if self
+                    .peek_next()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&'h'))
+                {
+                    self.word("challenge", Token::Challenge)
                 } else {
-                    Err(Error::UnexpectedChar(ch, pos))
+                    self.chars.next(); // consume 'c'
+                    if let Some(&(next_pos, next_ch)) = self.chars.peek() {
+                        match next_ch {
+                            's' | 'S' => {
+                                self.chars.next();
+                                Ok(Token::CritSuccess)
+                            }
+                            'f' | 'F' => {
+                                self.chars.next();
+                                Ok(Token::CritFail)
+                            }
+                            _ => Err(Error::UnexpectedChar(next_ch, next_pos)),
+                        }
+                    } else {
+                        Err(Error::UnexpectedChar(ch, pos))
+                    }
                 }
             }
             '=' => {
@@ -251,6 +292,38 @@ impl<'a> Lexer<'a> {
                 }
                 Some((pos, ch)) => return Err(Error::UnexpectedChar(ch, pos)),
                 None => return Err(Error::UnexpectedEof),
+            }
+        }
+
+        Ok(token)
+    }
+
+    /// Peek the character immediately after the current (not-yet-consumed)
+    /// character, without consuming anything.
+    fn peek_next(&self) -> Option<char> {
+        let mut iter = self.chars.clone();
+        iter.next();
+        iter.next().map(|(_, c)| c)
+    }
+
+    /// Consume the current anchor character, then attempt to match `rest`
+    /// case-insensitively on a cloned iterator. On a full match, returns
+    /// `token` with the whole word consumed. On any mismatch (including
+    /// running out of input), restores the iterator and returns `fallback`
+    /// having consumed only the anchor character.
+    fn word_or_fallback(&mut self, rest: &str, token: Token, fallback: Token) -> Result<Token> {
+        let saved_chars = self.chars.clone();
+        self.chars.next(); // consume the anchor character
+        for expected_ch in rest.chars() {
+            match self.chars.peek().copied() {
+                Some((_, ch)) if ch.eq_ignore_ascii_case(&expected_ch) => {
+                    self.chars.next();
+                }
+                _ => {
+                    self.chars = saved_chars;
+                    self.chars.next();
+                    return Ok(fallback);
+                }
             }
         }
 
@@ -451,6 +524,150 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::Marvel);
         assert_eq!(lexer.next_token().unwrap(), Token::Edge);
         assert_eq!(lexer.next_token().unwrap(), Token::Number(2));
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    // --- Narrative notation disambiguation matrix (regression-locked) ---
+
+    #[test]
+    fn test_penetrating_explode_reroll_regression() {
+        // 1d6!pr must still lex as penetrating explode + reroll, not as a
+        // 'p' word lookahead toward "Proficiency".
+        let mut lexer = Lexer::new("1d6!pr");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
+        assert_eq!(lexer.next_token().unwrap(), Token::Explode);
+        assert_eq!(lexer.next_token().unwrap(), Token::P);
+        assert_eq!(lexer.next_token().unwrap(), Token::R);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_penetrating_explode_alone_regression() {
+        let mut lexer = Lexer::new("1d6!p");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(6));
+        assert_eq!(lexer.next_token().unwrap(), Token::Explode);
+        assert_eq!(lexer.next_token().unwrap(), Token::P);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_fudge_regression() {
+        let mut lexer = Lexer::new("1dF");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Fudge);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_fudge_word_not_supported() {
+        // 1dF then trailing "udge" is not a recognized word; current-style
+        // error, not invented "fudge" word support.
+        let mut lexer = Lexer::new("1dfudge");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Fudge);
+        assert!(lexer.next_token().is_err());
+    }
+
+    #[test]
+    fn test_ampersand_token() {
+        let mut lexer = Lexer::new("&");
+        assert_eq!(lexer.next_token().unwrap(), Token::Ampersand);
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_ability_word_token_case_insensitive() {
+        for input in ["Ability", "ability", "ABILITY"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Ability);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_boost_word_token_case_insensitive() {
+        for input in ["Boost", "boost", "BOOST"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Boost);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_setback_word_token_case_insensitive() {
+        for input in ["Setback", "setback", "SETBACK"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Setback);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_force_word_token_case_insensitive() {
+        for input in ["Force", "force", "FORCE"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Force);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_difficulty_word_token_case_insensitive() {
+        for input in ["Difficulty", "DIFFICULTY"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Difficulty);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_digit_d_still_lexes_unchanged() {
+        let mut lexer = Lexer::new("D66");
+        assert_eq!(lexer.next_token().unwrap(), Token::DigitD);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(66));
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_proficiency_word_token_case_insensitive() {
+        for input in ["Proficiency", "proficiency", "PROFICIENCY"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Proficiency);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_challenge_word_token_case_insensitive() {
+        for input in ["Challenge", "challenge", "CHALLENGE"] {
+            let mut lexer = Lexer::new(input);
+            assert_eq!(lexer.next_token().unwrap(), Token::Challenge);
+            assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+        }
+    }
+
+    #[test]
+    fn test_crit_success_and_failure_still_lex_unchanged() {
+        let mut lexer = Lexer::new("cs20cf1");
+        assert_eq!(lexer.next_token().unwrap(), Token::CritSuccess);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(20));
+        assert_eq!(lexer.next_token().unwrap(), Token::CritFail);
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::Eof);
+    }
+
+    #[test]
+    fn test_marvel_word_still_lexes_unchanged() {
+        let mut lexer = Lexer::new("3dmarvel");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(3));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        assert_eq!(lexer.next_token().unwrap(), Token::Marvel);
         assert_eq!(lexer.next_token().unwrap(), Token::Eof);
     }
 }
