@@ -32,8 +32,9 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 |---|---|---|
 | T1 Symbol/SymbolPool | implementer seat | COMPLETE (81e0b1916272) |
 | T2 DieFace::Symbols + as_numeric Option + Marvel retrofit | implementer seat | COMPLETE (39938a6db9cc) |
-| T3 NarrativeDie kinds + face tables | implementer seat | in progress |
-| T4..T9 | implementer seat (sequential) | pending |
+| T3 NarrativeDie kinds + face tables | implementer seat | COMPLETE (2bc8c785f7d1) |
+| T4 RollPlan pool groups (behavior-neutral) | implementer seat | in progress |
+| T5..T9 | implementer seat (sequential) | pending |
 
 ## Rules
 
@@ -44,6 +45,11 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-11 22:58) T3 COMPLETE (2bc8c785f7d1) — my task
+  reviewer approved both verdicts; all 64 faces re-derived from Appendix A
+  independently and matched. Your per-commit pass + roborev still welcome as
+  additive. Claiming T4 (RollPlan pool groups, behavior-neutral refactor).
 
 - (reviewer seat, 2026-07-11 23:02) **T3 (2bc8c785f7d1) REVIEW PASSED.**
   Gates on the commit green (299 tests). I verified all seven face tables
