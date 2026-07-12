@@ -1,7 +1,7 @@
 # Phase 9 Design: Genesys/Star Wars Narrative Dice + Unified Special-Face Model
 
 **Date:** 2026-07-11
-**Status:** Reviewed (type-design + architecture review findings incorporated)
+**Status:** Reviewed (architecture + domain design reviews incorporated; no blocking findings)
 **Bead:** diceman-dqh
 **Prior art:** docs/diceman-refactor.md (Phase 9 sketch), docs/diceman-phase8-marvel-plan.md (§3.1 positional-M rationale, superseded by this design)
 
@@ -65,7 +65,10 @@ blur them:
    because parser validation pairs those scoring modes and modifiers only with
    numeric die kinds. These use a private `DieFace::numeric_value(self) -> i64`
    helper carrying the contract panic message once, instead of scattering
-   `.expect()` strings.
+   `.expect()` strings. Sort/comparison keys (keep-drop and rank ordering,
+   roller.rs:537,546,794,817,834,849) MUST go through `numeric_value` — never
+   sort `Option<i64>` directly, which orders `None` first and silently
+   corrupts keep/drop selection.
 2. **Marvel identity sites — genuine face-matching rewrites, NEVER
    `numeric_value`** (a `.expect()` here would panic exactly when M shows):
    - `score()` Marvel arm middle-die extraction (roller.rs:583-585) and
@@ -97,6 +100,10 @@ pub struct SymbolPool { counts: [u8; 9] }
 
 - Constructors/helpers: `SymbolPool::new()`, `of(&[Symbol])`, `count(Symbol)`,
   `add(Symbol, n)`, `merge(&SymbolPool)`, `contains(Symbol)`, `is_empty()`.
+- The `Symbol -> [u8; 9]` index is derived from the enum in exactly one place
+  (a `Symbol::index()` method with a compile-time count assertion), never
+  hand-duplicated — a transposed index is a silent miscount. Round-trip test:
+  every `Symbol` through `of()`/`count()` returns 1.
 - `Copy + Eq + Hash`-able; keeps `DieFace` `Copy` (9 bytes of counts).
 - Counts saturate on add/merge (`u8::MAX` cap). Realistic pools are <12 dice
   with ≤2 symbols per face; saturation is a documented safety net, not a
@@ -135,8 +142,9 @@ d616 pool IS the Marvel die — it has an M face; the outer dice don't).
   auto_fail, m_shown, Edge/Trouble selection, every exhaustive-enumeration
   distribution oracle at roller.rs:2175-2249) are preserved. Two
   representation-level assertions change and must be updated, not deleted:
-  roller.rs:2164 (`dice[1].face == Numeric(1)` ⇒ the M face) and
-  roller.rs:2166-2168 (history `[Numeric(1), Numeric(1)]` ⇒ two M faces).
+  roller.rs:2164 (`dice[1].face == Numeric(1)` ⇒ the M face) and the history
+  oracles at roller.rs:2136 and 2166-2168 (`Numeric(1)` literals for the
+  middle die ⇒ M faces).
   JSON die-face shape for the M face changes accordingly — breaking, flagged.
 - `MarvelOutcome`, `MarvelCheck`, Edge/Trouble notation, and typed Marvel APIs
   are unchanged.
@@ -206,6 +214,15 @@ Invariants (enforced in both `validate_narrative_roll` and `RollPlan::new*`):
 - Non-narrative plans: exactly one pool group; no Triumph/Despair rules.
 - New `Error::InvalidNarrativeRoll(String)` mirroring `InvalidMarvelRoll`.
 
+The `len > 1 ⟹ all Narrative` invariant is current scope, not domain law
+(document as such in the invariant comment): for numeric dice `+` already
+means arithmetic combination, so pool union only has meaning where scoring is
+pool-wide; a heterogeneous count-success pool (`4d6&2d10>=8`) is a plausible
+future extension. Mixing Force dice with skill dice in one union
+(`1dAbility&1dForce`) is deliberately ALLOWED — in-game they aren't rolled
+together, but diceman reports facts and `SymbolsOutcome` keeps the axes
+separate; the game layer interprets.
+
 What keeps symbolic faces out of numeric-only scoring arms is this validation
 plus production: numeric kinds produce only `Numeric` faces; narrative kinds
 are locked to `SymbolCancel`; MarvelD6 is locked to `MarvelMultiverse`.
@@ -247,6 +264,11 @@ producer for `Error::NonNumericOutcome` at the arithmetic seam (`2dAbility + 2`
 errors; `evaluate_total`/sim over a narrative expression errors cleanly). The
 "unreachable until Phase 9" comments at roller.rs:125-126 and 273-275 are
 removed as part of wiring the real tests.
+
+Every exhaustive `match` on `RollOutcome` gains a `Symbols` arm in the same
+change that adds the variant (workspace won't compile otherwise):
+diceman-py/src/lib.rs:268-272, sim.rs:238-245, roller.rs:214-221, plus the
+`format_roll` rewrite (§2.9).
 
 ### 2.7 Annotations
 
@@ -323,7 +345,11 @@ Semantics:
   — groups separated by ` | ` in pool order; outcome as a comma list of net
   facts (`N success(es)`/`N failure(s)` from the signed net, same for
   advantage/threat, plus `N triumph(s)` / `N despair(s)` / `N light` /
-  `N dark` when nonzero); `wash` when everything nets to zero.
+  `N dark` when nonzero); `wash` ONLY when all six outcome fields are zero.
+  Two representable outcomes must never be swallowed by `wash`: a zero-net
+  success axis with Triumph and/or Despair present (they render), and a
+  pure-Force roll (`successes: 0, advantages: 0`, pips nonzero — the pips
+  render). Formatter oracle for each.
   Group boundaries are re-derived from `pools()` counts — valid precisely
   because narrative pools admit no dice-count-changing modifiers; if a
   narrative modifier is ever added, this derivation must be revisited (noted
@@ -343,6 +369,11 @@ diceman genesys [--ability N] [--proficiency N] [--boost N]
 Builds the notation string and runs the normal `roll` pipeline (no typed
 Genesys API — not in bead scope; the notation covers it), prints the formatted
 roll; `--json` serializes the `RollResult`. At least one die required.
+The subcommand is the documented primary entry point: raw `&` notation must be
+quoted in a shell (`&` backgrounds the command) — note this wherever narrative
+notation appears (`diceman notation`, README). Embedded in YAML (fatescroll
+tables) the expressions are safe as plain scalars since they start with a
+digit; quoting is still the recommendation.
 `roll`/`sim` subcommands work unchanged (`sim` over narrative errors cleanly
 with the NonNumericOutcome message). `diceman notation` gains a narrative
 section.
@@ -379,7 +410,15 @@ Core bumps to v0.5.0; workspace crates follow. Breaking surface:
 - Face-table oracles: every face of all seven dice asserted against Appendix A.
 - Cancellation oracles: hand-computed mixed-pool cases including
   triumph-implicit-success cancellation, net-negative results, wash (tie →
-  zero nets), Force light/dark isolation.
+  zero nets), Force light/dark isolation. Explicit Triumph/Despair semantics
+  set (the classically-botched cases):
+  - one Triumph alone → `successes: 1, advantages: 0, triumphs: 1` (Triumph
+    never touches the advantage axis);
+  - Triumph + one Failure → `successes: 0, triumphs: 1` (implicit success
+    cancels);
+  - Triumph + Despair alone → `successes: 0, triumphs: 1, despairs: 1`
+    (implicit S/F net out; the symbols survive and never cancel each other);
+  - Triumph + four Failures → `successes: -3, triumphs: 1`.
 - Marvel regression: exhaustive-enumeration distribution oracles pass
   unchanged; the two representation-level tests (roller.rs:2164, 2166-2168)
   updated to the M face per §2.3; rerolled-M (Edge reroll landing on middle-die
