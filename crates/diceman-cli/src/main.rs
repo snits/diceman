@@ -74,6 +74,40 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Roll a Genesys/Star Wars narrative dice pool
+    Genesys {
+        /// Number of Ability (green) dice
+        #[arg(long, default_value_t = 0)]
+        ability: u32,
+
+        /// Number of Proficiency (yellow) dice
+        #[arg(long, default_value_t = 0)]
+        proficiency: u32,
+
+        /// Number of Boost (blue) dice
+        #[arg(long, default_value_t = 0)]
+        boost: u32,
+
+        /// Number of Difficulty (purple) dice
+        #[arg(long, default_value_t = 0)]
+        difficulty: u32,
+
+        /// Number of Challenge (red) dice
+        #[arg(long, default_value_t = 0)]
+        challenge: u32,
+
+        /// Number of Setback (black) dice
+        #[arg(long, default_value_t = 0)]
+        setback: u32,
+
+        /// Number of Force (white) dice
+        #[arg(long, default_value_t = 0)]
+        force: u32,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show dice notation reference
     Notation,
 }
@@ -114,6 +148,45 @@ fn main() {
         },
         Commands::Notation => {
             print_notation_reference();
+        }
+        Commands::Genesys {
+            ability,
+            proficiency,
+            boost,
+            difficulty,
+            challenge,
+            setback,
+            force,
+            json,
+        } => {
+            let notation = match genesys_notation(
+                ability,
+                proficiency,
+                boost,
+                difficulty,
+                challenge,
+                setback,
+                force,
+            ) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            match diceman::roll(&notation) {
+                Ok(result) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+                    } else {
+                        println!("{}", result.expression);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Marvel {
             edges,
@@ -187,6 +260,43 @@ fn print_sim_json(result: &diceman::SimResult) {
     });
 
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Build a `&`-joined narrative notation string from Genesys pool counts.
+///
+/// Groups are emitted in spec §2.10 order (ability, proficiency, boost,
+/// difficulty, challenge, setback, force) regardless of flag argument order;
+/// zero-count groups are omitted. Errors if every count is zero.
+#[allow(clippy::too_many_arguments)]
+fn genesys_notation(
+    ability: u32,
+    proficiency: u32,
+    boost: u32,
+    difficulty: u32,
+    challenge: u32,
+    setback: u32,
+    force: u32,
+) -> Result<String, String> {
+    let groups = [
+        (ability, "Ability"),
+        (proficiency, "Proficiency"),
+        (boost, "Boost"),
+        (difficulty, "Difficulty"),
+        (challenge, "Challenge"),
+        (setback, "Setback"),
+        (force, "Force"),
+    ];
+    let notation: Vec<String> = groups
+        .iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, name)| format!("{}d{}", count, name))
+        .collect();
+
+    if notation.is_empty() {
+        return Err("at least one die is required (e.g. --ability 2)".to_string());
+    }
+
+    Ok(notation.join("&"))
 }
 
 fn parse_policy(s: &str) -> Result<diceman::EdgePolicy, String> {
@@ -463,6 +573,25 @@ MARVEL MULTIVERSE
 
   Use `diceman marvel --edges N --target T` for target/verdict checks;
   `roll 3dMarvel` only shows the expression, not a target verdict.
+
+GENESYS / STAR WARS NARRATIVE DICE
+  Roll a pool of narrative dice by joining full die-word groups with `&`:
+  NdAbility, NdProficiency, NdBoost, NdDifficulty, NdChallenge, NdSetback,
+  NdForce. Faces cancel pairwise into net facts instead of summing to a
+  number, so narrative rolls cannot appear in arithmetic (2dAbility + 2
+  errors with "dice result is not numeric").
+
+  Quote narrative expressions in a shell: unquoted `&` backgrounds the
+  command. Prefer `diceman genesys --ability 2 --difficulty 1`, the
+  documented entry point, over raw notation.
+
+  Faces  S success, A advantage, Tr triumph, F failure, Th threat,
+         De despair, L light, Dk dark, - blank
+  Net facts: successes = (S + Tr) - (F + De), advantages = A - Th.
+  Triumph/despair counts are always reported, never cancelled; light/dark
+  never cancel each other.
+
+  Example: 2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages
 
 MODIFIER ORDER
   Modifiers apply: reroll -> explode -> keep/drop -> success count
@@ -785,6 +914,114 @@ mod tests {
             .expect("outcome object");
         for key in ["total", "auto_fail", "m_shown"] {
             assert!(outcome.contains_key(key), "missing outcome key: {}", key);
+        }
+    }
+
+    #[test]
+    fn genesys_notation_rejects_zero_flags() {
+        assert!(genesys_notation(0, 0, 0, 0, 0, 0, 0).is_err());
+    }
+
+    #[test]
+    fn genesys_notation_single_ability() {
+        assert_eq!(genesys_notation(2, 0, 0, 0, 0, 0, 0).unwrap(), "2dAbility");
+    }
+
+    #[test]
+    fn genesys_notation_single_proficiency() {
+        assert_eq!(
+            genesys_notation(0, 1, 0, 0, 0, 0, 0).unwrap(),
+            "1dProficiency"
+        );
+    }
+
+    #[test]
+    fn genesys_notation_single_boost() {
+        assert_eq!(genesys_notation(0, 0, 3, 0, 0, 0, 0).unwrap(), "3dBoost");
+    }
+
+    #[test]
+    fn genesys_notation_single_difficulty() {
+        assert_eq!(
+            genesys_notation(0, 0, 0, 2, 0, 0, 0).unwrap(),
+            "2dDifficulty"
+        );
+    }
+
+    #[test]
+    fn genesys_notation_single_challenge() {
+        assert_eq!(
+            genesys_notation(0, 0, 0, 0, 1, 0, 0).unwrap(),
+            "1dChallenge"
+        );
+    }
+
+    #[test]
+    fn genesys_notation_single_setback() {
+        assert_eq!(genesys_notation(0, 0, 0, 0, 0, 1, 0).unwrap(), "1dSetback");
+    }
+
+    #[test]
+    fn genesys_notation_single_force() {
+        assert_eq!(genesys_notation(0, 0, 0, 0, 0, 0, 1).unwrap(), "1dForce");
+    }
+
+    #[test]
+    fn genesys_notation_joins_in_spec_group_order() {
+        // Spec §2.10 group order: ability, proficiency, boost, difficulty,
+        // challenge, setback, force — independent of flag argument order.
+        assert_eq!(
+            genesys_notation(2, 1, 1, 2, 1, 1, 1).unwrap(),
+            "2dAbility&1dProficiency&1dBoost&2dDifficulty&1dChallenge&1dSetback&1dForce"
+        );
+    }
+
+    #[test]
+    fn genesys_notation_omits_zero_groups() {
+        assert_eq!(
+            genesys_notation(2, 0, 0, 1, 0, 0, 0).unwrap(),
+            "2dAbility&1dDifficulty"
+        );
+    }
+
+    #[test]
+    fn genesys_command_requires_at_least_one_flag() {
+        // Zero dice is a runtime error (all flags default to 0), not a clap
+        // parse error, so this must parse successfully.
+        let result = Cli::try_parse_from(["diceman", "genesys"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn genesys_command_accepts_ability_flag() {
+        let result = Cli::try_parse_from(["diceman", "genesys", "--ability", "2"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn genesys_roll_json_shape() {
+        let notation = genesys_notation(2, 0, 0, 1, 0, 0, 0).unwrap();
+        let result = diceman::roll(&notation).expect("roll");
+        let value = serde_json::to_value(&result).expect("serialize");
+        let obj = value.as_object().expect("object");
+        for key in ["outcome", "dice", "expression", "annotations"] {
+            assert!(obj.contains_key(key), "missing key: {}", key);
+        }
+        let outcome = obj.get("outcome").expect("outcome");
+        let symbols = outcome
+            .get("Symbols")
+            .expect("Symbols variant")
+            .as_object()
+            .expect("Symbols object");
+        for key in [
+            "successes",
+            "advantages",
+            "triumphs",
+            "despairs",
+            "light",
+            "dark",
+        ] {
+            assert!(symbols.contains_key(key), "missing symbols key: {}", key);
         }
     }
 }
