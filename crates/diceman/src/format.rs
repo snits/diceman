@@ -39,19 +39,12 @@ pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutc
 
 /// Format a Marvel Multiverse 3dMarvel roll.
 ///
-/// Renders `3dMarvel[l, M, r] = total` where the middle die shows `M` when its
-/// face is 1 (otherwise the face value), with an auto-fail or M-shown suffix.
+/// Renders `3dMarvel[l, M, r] = total` where each die renders via its face
+/// identity (the M face renders `M`), with an auto-fail or M-shown suffix.
 fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome) -> String {
     let dice_str: String = dice
         .iter()
-        .enumerate()
-        .map(|(i, d)| {
-            if i == 1 && d.face.as_numeric() == 1 {
-                "M".to_string()
-            } else {
-                d.face.to_string()
-            }
-        })
+        .map(|d| d.face.to_string())
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -187,7 +180,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
             } else if let Some(condition) = success_condition {
                 if condition
                     .compare
-                    .check(d.face.as_numeric(), condition.value)
+                    .check(d.face.numeric_value(), condition.value)
                 {
                     format!("{}*", d.face) // Success counting marker
                 } else {
