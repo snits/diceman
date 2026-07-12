@@ -521,7 +521,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an explode modifier (!, !!, !p, !!p, !>5, !!p>5).
+    /// Parse an explode modifier (!, !!, !p, !!p, !2, !>5, !!p2>5).
     fn explode_modifier(&mut self) -> Result<RollModifier> {
         let compounding = if self.current == Token::Explode {
             self.advance()?;
@@ -537,11 +537,19 @@ impl<'a> Parser<'a> {
             false
         };
 
+        let limit = if let Token::Number(n) = self.current {
+            self.advance()?;
+            Some(n)
+        } else {
+            None
+        };
+
         let condition = self.optional_condition()?;
 
         Ok(RollModifier::Explode {
             compounding,
             penetrating,
+            limit,
             condition,
         })
     }
@@ -803,6 +811,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -824,6 +833,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -848,6 +858,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -869,6 +880,54 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
+                    limit: None,
+                    condition: Some(Condition {
+                        compare: Compare::GreaterThan,
+                        value: 4,
+                    }),
+                }],
+                ScoringMode::Sum,
+                vec![],
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_explode_limit() {
+        let expr = parse("1d6!1").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                vec![RollModifier::Explode {
+                    compounding: false,
+                    penetrating: false,
+                    limit: Some(1),
+                    condition: None,
+                }],
+                ScoringMode::Sum,
+                vec![],
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_compounding_penetrating_limit_condition() {
+        let expr = parse("1d6!!p2>4").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
+                    count: 1,
+                    kind: DieKind::Number(6),
+                },
+                vec![RollModifier::Explode {
+                    compounding: true,
+                    penetrating: true,
+                    limit: Some(2),
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -893,6 +952,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -914,6 +974,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -935,6 +996,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -959,6 +1021,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -1730,5 +1793,71 @@ mod tests {
     fn test_roll_grouped_narrative_times_number_errors_non_numeric() {
         let err = crate::roll("(1dBoost) * 2").unwrap_err();
         assert!(matches!(err, Error::NonNumericOutcome));
+    }
+
+    // --- Round-trip: parse -> format -> parse for capped explosions ---
+
+    #[test]
+    fn test_format_roundtrip_explode_limit() {
+        use crate::roller::evaluate_with_rng;
+        use crate::test_support::TestRng;
+
+        let expr = parse("1d6!1").unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(
+            result.expression.starts_with("1d6!1"),
+            "expected expression to start with 1d6!1, got: {}",
+            result.expression
+        );
+    }
+
+    #[test]
+    fn test_format_roundtrip_explode_limit_full() {
+        use crate::roller::evaluate_with_rng;
+        use crate::test_support::TestRng;
+
+        let expr = parse("1d6!!p2>4").unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(
+            result.expression.starts_with("1d6!!p2>4"),
+            "expected expression to start with 1d6!!p2>4, got: {}",
+            result.expression
+        );
+    }
+
+    /// Parse `notation`, roll it, extract the rendered notation prefix from
+    /// `result.expression` (everything before the `[` dice detail), and
+    /// re-parse it. Asserts the re-parsed AST equals the originally parsed
+    /// AST — a genuine round trip, not just a string prefix check.
+    fn assert_reparses_identically(notation: &str) {
+        use crate::roller::evaluate_with_rng;
+        use crate::test_support::TestRng;
+
+        let original = parse(notation).unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&original, &mut rng).unwrap();
+        let bracket = result
+            .expression
+            .find('[')
+            .expect("expression should contain a '[' dice detail section");
+        let rendered_notation = &result.expression[..bracket];
+        let reparsed = parse(rendered_notation).unwrap();
+        assert_eq!(
+            original, reparsed,
+            "re-parsing rendered notation {:?} (from {:?}) did not match the original parse of {:?}",
+            rendered_notation, result.expression, notation
+        );
+    }
+
+    #[test]
+    fn test_format_roundtrip_explode_limit_reparses() {
+        assert_reparses_identically("1d6!1");
+    }
+
+    #[test]
+    fn test_format_roundtrip_explode_limit_full_reparses() {
+        assert_reparses_identically("1d6!!p2>4");
     }
 }

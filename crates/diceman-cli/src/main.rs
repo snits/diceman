@@ -518,6 +518,9 @@ EXPLODING DICE
   !!        Compounding explode, add to same die (Shadowrun style)
   !p        Penetrating explode, -1 per explosion (HackMaster style)
   !!p       Compounding penetrating
+  !N        Cap explosions at N times (e.g. 1d6!1 explodes at most once)
+  !!N       Compounding, capped at N
+  !pN       Penetrating, capped at N
 
   With conditions:
   !>N       Explode on greater than N
