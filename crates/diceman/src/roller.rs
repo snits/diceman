@@ -1176,6 +1176,18 @@ mod tests {
     }
 
     #[test]
+    fn narrative_formats_net_failure() {
+        // Difficulty roll 2 = F, Ability roll 1 = blank: net one failure.
+        assert_eq!(
+            narrative_expression(
+                &[(1, NarrativeDie::Difficulty), (1, NarrativeDie::Ability)],
+                vec![2, 1],
+            ),
+            "1dDifficulty&1dAbility[F | -] = 1 failure"
+        );
+    }
+
+    #[test]
     fn narrative_formats_force_pips() {
         assert_eq!(
             narrative_expression(&[(1, NarrativeDie::Force)], vec![7]),
