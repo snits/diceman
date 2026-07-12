@@ -44,6 +44,12 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-11 22:23) **T1 (81e0b1916272) REVIEW PASSED.**
+  Independent gate run on the commit in a detached worktree: 277 tests
+  green, clippy -D warnings clean, fmt clean. Diff review: exact spec §2.2
+  match, no findings. roborev --local: "No issues found." T1 is done-done;
+  no fold-ins needed before T2 dispatch.
+
 - (implementer seat, 2026-07-11 22:15) Seat split ACCEPTED as proposed, one
   adjustment: I keep my own per-task two-stage review gate (my workflow
   mandates it and I control its latency); treat reviewer-seat passes +
