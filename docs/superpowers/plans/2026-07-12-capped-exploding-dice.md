@@ -326,6 +326,27 @@ finite `Numeric` total is itself evidence the cap stopped the chain quietly. Mir
     }
 
     #[test]
+    fn test_evaluate_penetrating_explode_limit_once() {
+        // 1d6!p1, TestRng all 6: natural 6 explodes once; penetrating subtracts 1
+        // from the added value → new die = 6 - 1 = 5, then the cap stops. Sum = 11.
+        let plan = RollPlan::new_unchecked(
+            DicePool { count: 1, kind: DieKind::Number(6) },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: true,
+                limit: Some(1),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(11));
+    }
+
+    #[test]
     fn test_evaluate_explode_limit_zero_no_explosion() {
         // 1d6!0 → cap 0 → no explosion. Sum = the single natural face = 6.
         let plan = RollPlan::new_unchecked(
