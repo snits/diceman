@@ -48,7 +48,9 @@ pub struct RollPlan {
 }
 
 impl RollPlan {
-    /// Build a `RollPlan`, validating the Marvel Multiverse invariant.
+    /// Build a single-pool `RollPlan`, enforcing the shared invariant set via
+    /// `validate` — the Marvel Multiverse invariant and the narrative pairing
+    /// rules.
     ///
     /// A plan is Marvel exactly when its scoring is `MarvelMultiverse` and its
     /// pool kind is `MarvelD6`; those two must agree. A Marvel plan must roll
@@ -56,7 +58,10 @@ impl RollPlan {
     /// carry `annotation_rules` equal to exactly `[AnnotationRule::MarvelFantastic]`.
     /// A non-Marvel plan may not carry `Edge`/`Trouble` modifiers or a
     /// `MarvelFantastic` annotation, but critical-success/failure annotations
-    /// remain allowed.
+    /// remain allowed. `SymbolCancel` scoring with a non-narrative pool, and
+    /// `Triumph`/`Despair` annotation rules on a non-narrative plan, are
+    /// rejected (`InvalidNarrativeRoll`); a narrative single-group plan is
+    /// accepted here and held to the same rules as `new_narrative`.
     pub fn new(
         pool: DicePool,
         modifiers: Vec<RollModifier>,
