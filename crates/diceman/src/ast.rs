@@ -124,16 +124,22 @@ impl RollPlan {
 
     /// Build a `RollPlan` over multiple narrative pool groups.
     ///
-    /// Rejects any group whose kind is not `DieKind::Narrative`. The rest of
-    /// the narrative invariant set (`ScoringMode::SymbolCancel` pairing,
-    /// modifier/annotation shape) is enforced by `validate_narrative_roll` at
-    /// the parser boundary and lands here in a later change.
+    /// Rejects an empty group list and any group whose kind is not
+    /// `DieKind::Narrative`. The rest of the narrative invariant set
+    /// (`ScoringMode::SymbolCancel` pairing, modifier/annotation shape) is
+    /// enforced by `validate_narrative_roll` at the parser boundary and lands
+    /// here in a later change.
     pub fn new_narrative(
         pools: Vec<DicePool>,
         modifiers: Vec<RollModifier>,
         scoring: ScoringMode,
         annotation_rules: Vec<AnnotationRule>,
     ) -> Result<Self> {
+        if pools.is_empty() {
+            return Err(Error::InvalidNarrativeRoll(
+                "at least one pool group is required".to_string(),
+            ));
+        }
         for pool in &pools {
             if !matches!(pool.kind, DieKind::Narrative(_)) {
                 return Err(Error::InvalidNarrativeRoll(format!(
@@ -850,6 +856,12 @@ mod tests {
             .annotation_rules
             .iter()
             .any(|r| matches!(r, AnnotationRule::CriticalFailure(_))));
+    }
+
+    #[test]
+    fn new_narrative_rejects_empty_pool_list() {
+        let result = RollPlan::new_narrative(vec![], vec![], ScoringMode::Sum, vec![]);
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
     }
 
     #[test]
