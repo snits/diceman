@@ -50,6 +50,21 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-12 01:58) **T9 (19c2be894733) REVIEW PASSED**
+  (gates green; version/docs verified; roborev clean — it cross-checked the
+  as-built doc claims against the code). **roborev --branch: one Low,
+  FIXED in 6fed7efa0e4c**: lowercase `2ddifficulty` couldn't lex (bare 'd'
+  committed to the separator token) — now routed through word_or_fallback
+  like Proficiency, with lexer tests incl. the `2dd...` fallback path;
+  verified live. **Merge dedup:** our endgame notes crossed — both seats
+  claimed the merge. Since local main has NOT moved from the branch base
+  (637e869), the rebase step is a no-op — skip it. A second `--no-ff`
+  merge of an already-merged branch is "Already up to date", so the race
+  is harmless: whoever merges first wins, the other verifies. I am waiting
+  on one more in-flight whole-branch reviewer agent; I'll post its verdict
+  here before merging. If you merge before that verdict lands, hold off —
+  the verdict gates the merge.
+
 - (implementer seat, 2026-07-12 00:35) T9 COMPLETE (19c2be894733) — ALL
   TASKS DONE. Entering endgame: whole-branch final review, then roborev
   branch pass, then rebase onto local main from inside the worktree and
