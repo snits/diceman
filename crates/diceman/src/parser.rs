@@ -172,12 +172,12 @@ impl<'a> Parser<'a> {
             scoring
         };
 
-        Ok(Expr::Roll(RollPlan {
-            pool: DicePool { count, kind },
+        Ok(Expr::Roll(RollPlan::new_unchecked(
+            DicePool { count, kind },
             modifiers,
             scoring,
             annotation_rules,
-        }))
+        )))
     }
 
     /// Parse a digit dice roll (D66, D666, D44, etc.).
@@ -202,15 +202,15 @@ impl<'a> Parser<'a> {
         // Decompose into digits and validate all are the same
         let (sides, count) = Self::decompose_digit_dice(value)?;
 
-        Ok(Expr::Roll(RollPlan {
-            pool: DicePool {
+        Ok(Expr::Roll(RollPlan::new_unchecked(
+            DicePool {
                 count,
                 kind: DieKind::Number(sides),
             },
-            modifiers: vec![],
-            scoring: ScoringMode::DigitConcatenate,
-            annotation_rules: vec![],
-        }))
+            vec![],
+            ScoringMode::DigitConcatenate,
+            vec![],
+        )))
     }
 
     /// Decompose a digit dice value into (sides, count).
@@ -602,15 +602,15 @@ mod tests {
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
-        Expr::Roll(RollPlan {
-            pool: DicePool {
+        Expr::Roll(RollPlan::new_unchecked(
+            DicePool {
                 count,
                 kind: DieKind::Number(sides),
             },
-            modifiers: vec![],
-            scoring: ScoringMode::DigitConcatenate,
-            annotation_rules: vec![],
-        })
+            vec![],
+            ScoringMode::DigitConcatenate,
+            vec![],
+        ))
     }
 
     #[test]
@@ -624,15 +624,15 @@ mod tests {
         let expr = parse("2d6").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 2,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                vec![],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -641,15 +641,15 @@ mod tests {
         let expr = parse("4d6kh3").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 4,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::KeepHighest(3)],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                vec![RollModifier::KeepHighest(3)],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -671,19 +671,19 @@ mod tests {
         let expr = parse("1d6!").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
                     condition: None,
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -692,12 +692,12 @@ mod tests {
         let expr = parse("1d6!>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
                     condition: Some(Condition {
@@ -705,9 +705,9 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -716,19 +716,19 @@ mod tests {
         let expr = parse("1d6!p").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
                     condition: None,
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -737,12 +737,12 @@ mod tests {
         let expr = parse("1d6!p>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
                     condition: Some(Condition {
@@ -750,9 +750,9 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -761,19 +761,19 @@ mod tests {
         let expr = parse("1d6!!").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
                     condition: None,
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -782,19 +782,19 @@ mod tests {
         let expr = parse("1d6!!p").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
                     condition: None,
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -803,12 +803,12 @@ mod tests {
         let expr = parse("1d6!!>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
                     condition: Some(Condition {
@@ -816,9 +816,9 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -827,12 +827,12 @@ mod tests {
         let expr = parse("1d6!!p>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::Explode {
+                vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
                     condition: Some(Condition {
@@ -840,9 +840,9 @@ mod tests {
                         value: 4,
                     }),
                 }],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -851,15 +851,15 @@ mod tests {
         let expr = parse("d%").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Percent,
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                vec![],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -868,15 +868,15 @@ mod tests {
         let expr = parse("4dF").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 4,
                     kind: DieKind::Fudge,
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                vec![],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -897,15 +897,15 @@ mod tests {
         let expr = parse("4d6dl1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 4,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::DropLowest(1)],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                vec![RollModifier::DropLowest(1)],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -914,15 +914,15 @@ mod tests {
         let expr = parse("2d20dh1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 2,
                     kind: DieKind::Number(20),
                 },
-                modifiers: vec![RollModifier::DropHighest(1)],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![],
-            })
+                vec![RollModifier::DropHighest(1)],
+                ScoringMode::Sum,
+                vec![],
+            ))
         );
     }
 
@@ -931,18 +931,18 @@ mod tests {
         let expr = parse("5d10>=8").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 5,
                     kind: DieKind::Number(10),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::CountSuccesses(Condition {
+                vec![],
+                ScoringMode::CountSuccesses(Condition {
                     compare: Compare::GreaterOrEqual,
                     value: 8,
                 }),
-                annotation_rules: vec![],
-            })
+                vec![],
+            ))
         );
     }
 
@@ -951,18 +951,18 @@ mod tests {
         let expr = parse("6d6>4").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 6,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::CountSuccesses(Condition {
+                vec![],
+                ScoringMode::CountSuccesses(Condition {
                     compare: Compare::GreaterThan,
                     value: 4,
                 }),
-                annotation_rules: vec![],
-            })
+                vec![],
+            ))
         );
     }
 
@@ -971,18 +971,18 @@ mod tests {
         let expr = parse("8d6=6").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 8,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::CountSuccesses(Condition {
+                vec![],
+                ScoringMode::CountSuccesses(Condition {
                     compare: Compare::Equal,
                     value: 6,
                 }),
-                annotation_rules: vec![],
-            })
+                vec![],
+            ))
         );
     }
 
@@ -991,15 +991,15 @@ mod tests {
         let expr = parse("3dMarvel").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 3,
                     kind: DieKind::MarvelD6,
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::MarvelMultiverse,
-                annotation_rules: vec![AnnotationRule::MarvelFantastic],
-            })
+                vec![],
+                ScoringMode::MarvelMultiverse,
+                vec![AnnotationRule::MarvelFantastic],
+            ))
         );
     }
 
@@ -1008,17 +1008,12 @@ mod tests {
         for input in ["3dMarvel", "3dmarvel", "3dMARVEL"] {
             let expr = parse(input).unwrap();
             assert!(matches!(
-                expr,
-                Expr::Roll(RollPlan {
-                    pool: DicePool {
-                        count: 3,
-                        kind: DieKind::MarvelD6,
-                    },
-                    modifiers,
-                    scoring: ScoringMode::MarvelMultiverse,
-                    annotation_rules,
-                }) if modifiers.is_empty()
-                    && annotation_rules == vec![AnnotationRule::MarvelFantastic]
+                &expr,
+                Expr::Roll(plan) if plan.pool().count == 3
+                    && plan.pool().kind == DieKind::MarvelD6
+                    && plan.modifiers().is_empty()
+                    && plan.scoring() == &ScoringMode::MarvelMultiverse
+                    && plan.annotation_rules() == vec![AnnotationRule::MarvelFantastic]
             ));
         }
     }
@@ -1049,18 +1044,18 @@ mod tests {
         let expr = parse("3dMarvele2").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 3,
                     kind: DieKind::MarvelD6,
                 },
-                modifiers: vec![RollModifier::Edge {
+                vec![RollModifier::Edge {
                     count: 2,
                     policy: EdgePolicy::RerollLowest,
                 }],
-                scoring: ScoringMode::MarvelMultiverse,
-                annotation_rules: vec![AnnotationRule::MarvelFantastic],
-            })
+                ScoringMode::MarvelMultiverse,
+                vec![AnnotationRule::MarvelFantastic],
+            ))
         );
     }
 
@@ -1069,18 +1064,18 @@ mod tests {
         let expr = parse("3dMarvele").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 3,
                     kind: DieKind::MarvelD6,
                 },
-                modifiers: vec![RollModifier::Edge {
+                vec![RollModifier::Edge {
                     count: 1,
                     policy: EdgePolicy::RerollLowest,
                 }],
-                scoring: ScoringMode::MarvelMultiverse,
-                annotation_rules: vec![AnnotationRule::MarvelFantastic],
-            })
+                ScoringMode::MarvelMultiverse,
+                vec![AnnotationRule::MarvelFantastic],
+            ))
         );
     }
 
@@ -1089,15 +1084,15 @@ mod tests {
         let expr = parse("3dMarvelt1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 3,
                     kind: DieKind::MarvelD6,
                 },
-                modifiers: vec![RollModifier::Trouble { count: 1 }],
-                scoring: ScoringMode::MarvelMultiverse,
-                annotation_rules: vec![AnnotationRule::MarvelFantastic],
-            })
+                vec![RollModifier::Trouble { count: 1 }],
+                ScoringMode::MarvelMultiverse,
+                vec![AnnotationRule::MarvelFantastic],
+            ))
         );
     }
 
@@ -1112,16 +1107,11 @@ mod tests {
             let expr = parse(input).unwrap();
             assert!(
                 matches!(
-                    expr,
-                    Expr::Roll(RollPlan {
-                        pool: DicePool {
-                            count: 3,
-                            kind: DieKind::MarvelD6,
-                        },
-                        scoring: ScoringMode::MarvelMultiverse,
-                        annotation_rules,
-                        ..
-                    }) if annotation_rules == vec![AnnotationRule::MarvelFantastic]
+                    &expr,
+                    Expr::Roll(plan) if plan.pool().count == 3
+                        && plan.pool().kind == DieKind::MarvelD6
+                        && plan.scoring() == &ScoringMode::MarvelMultiverse
+                        && plan.annotation_rules() == vec![AnnotationRule::MarvelFantastic]
                 ),
                 "{input} should parse as a Marvel roll with Edge/Trouble modifiers"
             );
@@ -1179,18 +1169,18 @@ mod tests {
         let expr = parse("1d20cs20").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(20),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![AnnotationRule::CriticalSuccess(Condition {
+                vec![],
+                ScoringMode::Sum,
+                vec![AnnotationRule::CriticalSuccess(Condition {
                     compare: Compare::Equal,
                     value: 20,
                 })],
-            })
+            ))
         );
     }
 
@@ -1199,18 +1189,18 @@ mod tests {
         let expr = parse("1d20cf1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(20),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![AnnotationRule::CriticalFailure(Condition {
+                vec![],
+                ScoringMode::Sum,
+                vec![AnnotationRule::CriticalFailure(Condition {
                     compare: Compare::Equal,
                     value: 1,
                 })],
-            })
+            ))
         );
     }
 
@@ -1219,14 +1209,14 @@ mod tests {
         let expr = parse("1d20cs20cf1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(20),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![
+                vec![],
+                ScoringMode::Sum,
+                vec![
                     AnnotationRule::CriticalSuccess(Condition {
                         compare: Compare::Equal,
                         value: 20,
@@ -1236,7 +1226,7 @@ mod tests {
                         value: 1,
                     }),
                 ],
-            })
+            ))
         );
     }
 
@@ -1245,14 +1235,14 @@ mod tests {
         let expr = parse("1d20cs>=19cf1").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(20),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![
+                vec![],
+                ScoringMode::Sum,
+                vec![
                     AnnotationRule::CriticalSuccess(Condition {
                         compare: Compare::GreaterOrEqual,
                         value: 19,
@@ -1262,7 +1252,7 @@ mod tests {
                         value: 1,
                     }),
                 ],
-            })
+            ))
         );
     }
 
@@ -1295,18 +1285,18 @@ mod tests {
         let expr = parse("4d6kh3cs6").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 4,
                     kind: DieKind::Number(6),
                 },
-                modifiers: vec![RollModifier::KeepHighest(3)],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![AnnotationRule::CriticalSuccess(Condition {
+                vec![RollModifier::KeepHighest(3)],
+                ScoringMode::Sum,
+                vec![AnnotationRule::CriticalSuccess(Condition {
                     compare: Compare::Equal,
                     value: 6,
                 })],
-            })
+            ))
         );
     }
 
@@ -1315,14 +1305,14 @@ mod tests {
         let expr = parse("1d20cf1cs20").unwrap();
         assert_eq!(
             expr,
-            Expr::Roll(RollPlan {
-                pool: DicePool {
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
                     count: 1,
                     kind: DieKind::Number(20),
                 },
-                modifiers: vec![],
-                scoring: ScoringMode::Sum,
-                annotation_rules: vec![
+                vec![],
+                ScoringMode::Sum,
+                vec![
                     AnnotationRule::CriticalFailure(Condition {
                         compare: Compare::Equal,
                         value: 1,
@@ -1332,7 +1322,7 @@ mod tests {
                         value: 20,
                     }),
                 ],
-            })
+            ))
         );
     }
 

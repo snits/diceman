@@ -114,8 +114,8 @@ pub fn roll_with_rng(expr: &str, rng: &mut impl Rng) -> Result<RollResult> {
 /// let expr = diceman::parse("4d6kh3").unwrap();
 /// match expr {
 ///     Expr::Roll(plan) => {
-///         assert_eq!(plan.pool.count, 4);
-///         assert_eq!(plan.pool.kind, DieKind::Number(6));
+///         assert_eq!(plan.pool().count, 4);
+///         assert_eq!(plan.pool().kind, DieKind::Number(6));
 ///     }
 ///     _ => panic!("Expected a roll"),
 /// }
@@ -209,9 +209,9 @@ mod tests {
         let expr = parse("4d6kh3").unwrap();
         match expr {
             Expr::Roll(plan) => {
-                assert_eq!(plan.pool.count, 4);
-                assert_eq!(plan.pool.kind, DieKind::Number(6));
-                assert_eq!(plan.modifiers.len(), 1);
+                assert_eq!(plan.pool().count, 4);
+                assert_eq!(plan.pool().kind, DieKind::Number(6));
+                assert_eq!(plan.modifiers().len(), 1);
             }
             _ => panic!("Expected a roll"),
         }
