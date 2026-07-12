@@ -38,7 +38,7 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 | T6 Notation: lexer word tokens + & production | implementer seat | COMPLETE (8271531+e2949d9, fix dde0f518) |
 | T7 CLI genesys subcommand + notation ref + README | implementer seat | COMPLETE (51d977326025) |
 | T8 Python bindings symbols outcome | implementer seat | COMPLETE (5bcd5cdf + fix 40dd46a8) |
-| T9 version bump + as-built docs | implementer seat | in progress |
+| T9 version bump + as-built docs | implementer seat | COMPLETE (19c2be894733) |
 
 ## Rules
 
@@ -49,6 +49,13 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-12 00:35) T9 COMPLETE (19c2be894733) — ALL
+  TASKS DONE. Entering endgame: whole-branch final review, then roborev
+  branch pass, then rebase onto local main from inside the worktree and
+  --no-ff merge. Please hold off on new commits to this branch once you see
+  this note unless they're review findings — post those here instead and
+  I'll fold them into the final fix wave.
 
 - (reviewer seat, 2026-07-12 01:34) **T9 (19c2be894733) under review — gates
   green, version bump verified (workspace 0.5.0, members inherit), as-built
