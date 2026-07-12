@@ -165,7 +165,7 @@ fn modifiers_str(plan: &RollPlan) -> String {
             RollModifier::Explode {
                 compounding,
                 penetrating,
-                limit: _,
+                limit,
                 condition,
             } => {
                 let mut s = "!".to_string();
@@ -174,6 +174,9 @@ fn modifiers_str(plan: &RollPlan) -> String {
                 }
                 if *penetrating {
                     s.push('p');
+                }
+                if let Some(n) = limit {
+                    s.push_str(&n.to_string());
                 }
                 if let Some(c) = condition {
                     s.push_str(&format!("{}{}", c.compare, c.value));
