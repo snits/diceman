@@ -47,7 +47,7 @@
 - Rerolled middle-die raw 1 becomes the M face in `face` AND `history`.
 
 **Acceptance:**
-- All existing Marvel distribution/Edge/Trouble/cancellation oracles pass unchanged; representation literals updated only where a middle-die raw 1 appears (e.g. the Trouble-reroll history test ~roller.rs:2164-2170: face and both history entries become the M face).
+- All existing Marvel distribution/Edge/Trouble/cancellation oracles pass unchanged; representation literals updated only where a middle-die raw 1 appears — FIND them by grepping test code for middle-die `Numeric(1)` literals rather than trusting line numbers (concurrent sessions may shift them; e.g. `marvel_trouble_records_rejected_reroll_in_history`: face and both history entries become the M face; the Edge-reroll sibling test with face `Numeric(3)` must NOT change).
 - New tests: M face Display renders `M` and formatted Marvel output strings are byte-identical to before; rerolled-M history; ChaseFantastic still chases M (deterministic TestRng); every `Symbol` round-trips through `of()`/`count()`; serde snapshot for the M face JSON (`{"Symbols":{"Marvel":1}}` shape per custom impl) and for a numeric face (unchanged shape).
 - `format_roll` matches `Numeric(n) | Successes(n)` binding `n` directly — zero `.expect()` in format.rs; inner scoring match gains `SymbolCancel => unreachable!()` only if SymbolCancel exists yet (it does not in this task — add that arm in Task 2).
 
@@ -66,6 +66,7 @@
 - `ScoringMode::SymbolCancel`; `AnnotationRule::Triumph`, `AnnotationRule::Despair`; `Annotation::Triumph`, `Annotation::Despair`.
 
 **Constraints:**
+- Face production: `roll_die` gains a `DieKind::Narrative(n)` arm returning the raw 1..=count roll; `roll_pool` branches on kind to wrap narrative rolls as `DieFace::Symbols(NarrativeDie::face(raw))`, all others as before (`roll_die` ~roller.rs:664, `roll_pool` ~roller.rs:349; Task 3 later layers group iteration onto `roll_pool`).
 - Netting: `successes = (S+Tr) − (F+De)`, `advantages = A − T`; triumph/despair/light/dark counts reported uncancelled; Triumph NEVER touches the advantage axis (spec §4 oracle set is mandatory, verbatim).
 - `apply_annotations` re-derives from dice (marvel_facts pattern), keeps its `(dice, rules, scoring)` signature; pushes each annotation once when count > 0.
 - Tests construct plans via `new_unchecked` + TestRng (notation lands in Task 4; do not touch parser).
@@ -94,7 +95,7 @@
 - `evaluate_roll`/`roll_pool` concatenate group dice in group order; score once over the flat slice.
 - `format_narrative_roll` derives group boundaries from `pools()` counts (valid: no dice-count-changing modifiers on narrative; leave the §2.9-mandated code note), ` | ` group separator.
 
-**Acceptance:** existing suite green (proves single-pool paths intact); `new_narrative` accept/reject matrix (each invariant violated singly → `InvalidNarrativeRoll`, plus happy paths incl. duplicate kinds and Force+skill mix); multi-group evaluate: deterministic 2-group roll nets across groups and renders `2dAbility&1dDifficulty[S, SA | Th] = 1 success, 1 advantage, 1 threat`-style output (exact string asserted).
+**Acceptance:** existing suite green (proves single-pool paths intact); `new_narrative` accept/reject matrix (each invariant violated singly → `InvalidNarrativeRoll`, plus happy paths incl. duplicate kinds and Force+skill mix; `new_narrative` takes `modifiers`/`scoring` to validate-and-reject, mirroring `new()` — not dead params); multi-group evaluate: deterministic 2-group roll nets across groups — TestRng `[7,8,4]` over `2dAbility&1dDifficulty` (Ability face 7 = S+A, face 8 = A+A; Difficulty face 4 = T; re-confirm 1-indexed rng→face mapping against Task 2's roll_die) renders exactly `2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages` (aggregate S=1, A=3, T=1 ⇒ net successes 1, net advantages 2) — exact string asserted, cross-group cancellation exercised.
 
 ### Task 4: Notation — lexer word tokens, `&`, parser narrative production
 
@@ -151,6 +152,6 @@
 
 - Sequential tasks — each builds on the previous task's types. No parallel dispatch.
 - Per task: implementer subagent (TDD, commits) → spec-compliance review (against this plan + cited spec sections) → code-quality review → roborev review of the commits (`roborev review <sha> --local` from INSIDE the worktree — daemon can't see `.claude/worktrees/*`) → next task.
-- Controller pre-flight per task (Phase 8 lesson): re-grep for new exhaustive-match sites and cross-crate breakage BEFORE dispatching (`grep -rn "match.*outcome\|match.*RollOutcome" crates/`), and hand the implementer the exact list.
+- Controller pre-flight per task (Phase 8 lesson): re-grep for new exhaustive-match sites and cross-crate breakage BEFORE dispatching — cover EVERY enum the task extends: `grep -rn "match" crates/ | grep -E "RollOutcome|DieFace|DieKind|ScoringMode|Symbol|NarrativeDie"` — and hand the implementer the exact list. Known non-test exhaustive sites: `DieKind` → format.rs:131,150, ast.rs:378, roller.rs:664; `ScoringMode` → format.rs:28,160, roller.rs:553; `RollOutcome` → ast.rs:299, format.rs:22, sim.rs:238, roller.rs:214, diceman-py:268. Test-code matches carry catch-alls and won't break.
 - The concurrent-collaborator caveat: another session may amend commits on this branch. `git log` before each dispatch; never assume HEAD.
 - Deferred (file follow-up beads at session close): Genesys simulation support (needs a non-numeric SimResult shape); fatescroll-side YAML round-trip integration test.
