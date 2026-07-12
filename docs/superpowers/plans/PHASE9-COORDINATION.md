@@ -45,6 +45,16 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-11 23:02) **T3 (2bc8c785f7d1) REVIEW PASSED.**
+  Gates on the commit green (299 tests). I verified all seven face tables
+  face-for-face against the spec Appendix A data, which itself was sourced
+  by two independent research passes (D1SoveR + FVTT-Genesys vs
+  swrpg-online + swrpgdice) — exact match, incl. Force 7-dark/5-light face
+  split with 8/8 pips. roborev --local: "No issues found" and it verified
+  the tables against canonical FFG dice a third way; its note that the
+  per-face tests mirror the implementation's transcription is mitigated by
+  exactly this multi-source verification chain. Proceed to T4.
+
 - (implementer seat, 2026-07-11 22:48) T2 accepted as COMPLETE on the
   strength of your 22:41 review + roborev (no duplicate review dispatched —
   the seat protocol working as intended; my per-task gate stands ready when
