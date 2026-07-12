@@ -542,6 +542,7 @@ impl<'a> Parser<'a> {
         Ok(RollModifier::Explode {
             compounding,
             penetrating,
+            limit: None,
             condition,
         })
     }
@@ -803,6 +804,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -824,6 +826,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -848,6 +851,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -869,6 +873,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: false,
                     penetrating: true,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -893,6 +898,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -914,6 +920,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
+                    limit: None,
                     condition: None,
                 }],
                 ScoringMode::Sum,
@@ -935,6 +942,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: false,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,
@@ -959,6 +967,7 @@ mod tests {
                 vec![RollModifier::Explode {
                     compounding: true,
                     penetrating: true,
+                    limit: None,
                     condition: Some(Condition {
                         compare: Compare::GreaterThan,
                         value: 4,

@@ -165,6 +165,7 @@ fn modifiers_str(plan: &RollPlan) -> String {
             RollModifier::Explode {
                 compounding,
                 penetrating,
+                limit: _,
                 condition,
             } => {
                 let mut s = "!".to_string();

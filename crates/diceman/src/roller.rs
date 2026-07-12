@@ -458,6 +458,7 @@ impl<R: Rng> Evaluator<'_, R> {
                 RollModifier::Explode {
                     compounding,
                     penetrating,
+                    limit: _,
                     condition,
                 } => {
                     self.apply_explode(dice, kind, *compounding, *penetrating, condition.as_ref())?;
@@ -1534,6 +1535,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: true,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1557,6 +1559,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: true,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1580,6 +1583,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: false,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1604,6 +1608,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: false,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1628,6 +1633,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: false,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1653,6 +1659,7 @@ mod tests {
                 RollModifier::Explode {
                     compounding: false,
                     penetrating: false,
+                    limit: None,
                     condition: None,
                 },
                 RollModifier::KeepHighest(2),
@@ -1681,6 +1688,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: true,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1716,6 +1724,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: true,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -1734,6 +1743,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: true,
+                limit: None,
                 condition: None,
             }],
             ScoringMode::Sum,
@@ -2217,6 +2227,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: true,
                 penetrating: false,
+                limit: None,
                 condition: None, // defaults to =max (6)
             }],
             ScoringMode::Sum,
@@ -2240,6 +2251,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: false,
+                limit: None,
                 condition: None, // defaults to =max (6)
             }],
             ScoringMode::Sum,
@@ -2266,6 +2278,7 @@ mod tests {
             vec![RollModifier::Explode {
                 compounding: false,
                 penetrating: false,
+                limit: None,
                 condition: None, // defaults to =max (6)
             }],
             ScoringMode::Sum,
