@@ -338,6 +338,9 @@ pub enum RollModifier {
         compounding: bool,
         /// If true, subtract 1 from each explosion roll's added value.
         penetrating: bool,
+        /// Maximum explosions per originating die's chain. None = unlimited
+        /// (bounded only by the internal runaway guard).
+        limit: Option<u32>,
         /// The condition for explosion (defaults to max value).
         condition: Option<Condition>,
     },
