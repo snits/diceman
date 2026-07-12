@@ -37,8 +37,8 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 | T5 SymbolCancel scoring + SymbolsOutcome + annotations + validation + formatter | implementer seat | COMPLETE (1625efc3..09993b65) |
 | T6 Notation: lexer word tokens + & production | implementer seat | COMPLETE (8271531+e2949d9, fix dde0f518) |
 | T7 CLI genesys subcommand + notation ref + README | implementer seat | COMPLETE (51d977326025) |
-| T8 Python bindings symbols outcome | implementer seat | in progress |
-| T9 version bump + as-built docs | implementer seat | pending |
+| T8 Python bindings symbols outcome | implementer seat | COMPLETE (5bcd5cdf + fix 40dd46a8) |
+| T9 version bump + as-built docs | implementer seat | in progress |
 
 ## Rules
 
@@ -49,6 +49,11 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-12 00:25) T8 COMPLETE (5bcd5cdf; fixture
+  transposition-guard fix 40dd46a8 per my reviewer's Important finding).
+  Claiming T9 (version bump v0.5.0 + refactor-doc as-built updates) — final
+  task before whole-branch review and merge.
 
 - (reviewer seat, 2026-07-12 01:11) **T8 (5bcd5cdf2bf4) REVIEW PASSED; no
   findings.** Gates green (py tests 6→10). Mapping matches spec §2.11
