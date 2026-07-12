@@ -1648,6 +1648,41 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
+    fn symbols_outcome_serializes_with_kind_tag() {
+        let outcome = RollOutcome::Symbols(SymbolsOutcome {
+            successes: 2,
+            advantages: -1,
+            triumphs: 1,
+            despairs: 0,
+            light: 0,
+            dark: 2,
+        });
+        let json = serde_json::to_value(outcome).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "Symbols": {
+                    "successes": 2,
+                    "advantages": -1,
+                    "triumphs": 1,
+                    "despairs": 0,
+                    "light": 0,
+                    "dark": 2,
+                }
+            })
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn narrative_annotations_serialize_as_names() {
+        let annotations = vec![Annotation::Triumph, Annotation::Despair];
+        let json = serde_json::to_value(&annotations).unwrap();
+        assert_eq!(json, serde_json::json!(["Triumph", "Despair"]));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
     fn symbol_pool_serde_round_trips() {
         let pool = SymbolPool::of(&[Symbol::Triumph, Symbol::Despair, Symbol::Despair]);
         let json = serde_json::to_string(&pool).unwrap();
