@@ -44,6 +44,9 @@ pub enum Error {
     #[error("Invalid Marvel roll: {0}")]
     InvalidMarvelRoll(String),
 
+    #[error("Invalid narrative roll: {0}")]
+    InvalidNarrativeRoll(String),
+
     #[error("{0} count must be at least 1")]
     ZeroMarvelCount(&'static str),
 

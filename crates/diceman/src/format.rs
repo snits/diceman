@@ -2,8 +2,8 @@
 // ABOUTME: Converts roll data (dice values, modifiers, crits) into display expressions.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DieKind, EdgePolicy, MarvelOutcome, RollModifier,
-    RollOutcome, RollPlan, ScoringMode,
+    AnnotationRule, Compare, Condition, DicePool, DieKind, EdgePolicy, MarvelOutcome, RollModifier,
+    RollOutcome, RollPlan, ScoringMode, SymbolsOutcome,
 };
 use crate::roller::{DieResult, RollResult};
 use std::fmt;
@@ -21,37 +21,27 @@ impl fmt::Display for RollResult {
 pub(crate) fn format_roll(plan: &RollPlan, dice: &[DieResult], outcome: RollOutcome) -> String {
     match outcome {
         RollOutcome::Marvel(marvel) => format_marvel_roll(plan, dice, marvel),
-        _ => {
-            let total = outcome.as_numeric().expect(
-                "Sum/CountSuccesses/DigitConcatenate scoring always yields a numeric outcome",
-            );
-            match plan.scoring() {
-                ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
-                ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
-                    format_standard_roll(plan, dice, total)
-                }
-                // Routed to format_marvel_roll via the outer match.
-                ScoringMode::MarvelMultiverse => unreachable!(),
+        RollOutcome::Symbols(symbols) => format_narrative_roll(plan, dice, symbols),
+        RollOutcome::Numeric(total) | RollOutcome::Successes(total) => match plan.scoring() {
+            ScoringMode::DigitConcatenate => format_digit_roll(plan, dice, total),
+            ScoringMode::Sum | ScoringMode::CountSuccesses(_) => {
+                format_standard_roll(plan, dice, total)
             }
-        }
+            // Marvel routes via the outer match's Marvel arm, SymbolCancel via
+            // its Symbols arm; neither yields a Numeric/Successes outcome.
+            ScoringMode::MarvelMultiverse | ScoringMode::SymbolCancel => unreachable!(),
+        },
     }
 }
 
 /// Format a Marvel Multiverse 3dMarvel roll.
 ///
-/// Renders `3dMarvel[l, M, r] = total` where the middle die shows `M` when its
-/// face is 1 (otherwise the face value), with an auto-fail or M-shown suffix.
+/// Renders `3dMarvel[l, M, r] = total` where each die renders via its face
+/// identity (the M face renders `M`), with an auto-fail or M-shown suffix.
 fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome) -> String {
     let dice_str: String = dice
         .iter()
-        .enumerate()
-        .map(|(i, d)| {
-            if i == 1 && d.face.as_numeric() == 1 {
-                "M".to_string()
-            } else {
-                d.face.to_string()
-            }
-        })
+        .map(|d| d.face.to_string())
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -66,12 +56,101 @@ fn format_marvel_roll(plan: &RollPlan, dice: &[DieResult], marvel: MarvelOutcome
     let modifiers = modifiers_str(plan);
     format!(
         "{}dMarvel{}[{}] = {}{}",
-        plan.pool().count,
+        plan.pools()[0].count,
         modifiers,
         dice_str,
         marvel.total,
         suffix
     )
+}
+
+/// Format a narrative (Genesys/Star Wars) symbol-cancellation roll.
+///
+/// Renders `<notation>[<group faces>] = <net facts>`, e.g.
+/// `2dAbility&1dDifficulty[SA, AA | Th] = 1 success, 2 advantages`. Group
+/// boundaries are re-derived from the pool counts (see `narrative_dice_str`).
+fn format_narrative_roll(plan: &RollPlan, dice: &[DieResult], outcome: SymbolsOutcome) -> String {
+    format!(
+        "{}[{}] = {}",
+        narrative_notation(plan.pools()),
+        narrative_dice_str(plan.pools(), dice),
+        narrative_outcome_str(&outcome),
+    )
+}
+
+/// Render the pool notation for a narrative roll, e.g. `2dAbility&1dDifficulty`.
+fn narrative_notation(pools: &[DicePool]) -> String {
+    pools
+        .iter()
+        .map(|pool| match pool.kind {
+            DieKind::Narrative(die) => format!("{}d{}", pool.count, die),
+            // Narrative scoring only ever holds narrative pool groups.
+            DieKind::Number(_) | DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
+                unreachable!("narrative formatting requires narrative die kinds")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Render the per-group die faces of a narrative roll, groups separated by
+/// ` | ` in pool order and faces within a group by `, `.
+///
+/// Group boundaries are re-derived from `pools()` counts. This is valid
+/// precisely because narrative pools admit no dice-count-changing modifiers;
+/// if a narrative modifier is ever added, this derivation must be revisited.
+fn narrative_dice_str(pools: &[DicePool], dice: &[DieResult]) -> String {
+    let mut groups = Vec::with_capacity(pools.len());
+    let mut start = 0;
+    for pool in pools {
+        let end = start + pool.count as usize;
+        let faces = dice[start..end]
+            .iter()
+            .map(|d| d.face.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        groups.push(faces);
+        start = end;
+    }
+    groups.join(" | ")
+}
+
+/// Render a narrative outcome as a comma-separated list of net facts, or
+/// `wash` when all six outcome fields are zero.
+fn narrative_outcome_str(o: &SymbolsOutcome) -> String {
+    let mut parts = Vec::new();
+    if o.successes > 0 {
+        parts.push(count_word(o.successes, "success", "successes"));
+    } else if o.successes < 0 {
+        parts.push(count_word(-o.successes, "failure", "failures"));
+    }
+    if o.advantages > 0 {
+        parts.push(count_word(o.advantages, "advantage", "advantages"));
+    } else if o.advantages < 0 {
+        parts.push(count_word(-o.advantages, "threat", "threats"));
+    }
+    if o.triumphs > 0 {
+        parts.push(count_word(o.triumphs as i64, "triumph", "triumphs"));
+    }
+    if o.despairs > 0 {
+        parts.push(count_word(o.despairs as i64, "despair", "despairs"));
+    }
+    if o.light > 0 {
+        parts.push(format!("{} light", o.light));
+    }
+    if o.dark > 0 {
+        parts.push(format!("{} dark", o.dark));
+    }
+    if parts.is_empty() {
+        "wash".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// Format a count with singular/plural noun, e.g. `1 success`, `2 successes`.
+fn count_word(n: i64, singular: &str, plural: &str) -> String {
+    format!("{} {}", n, if n == 1 { singular } else { plural })
 }
 
 /// Render the modifier portion of a roll notation (e.g., "kh3!p>4r<3").
@@ -128,15 +207,17 @@ fn modifiers_str(plan: &RollPlan) -> String {
 /// Digit dice carry no modifiers or annotations from the parser, so dropped
 /// dice and crit markers do not arise here; values render plain.
 fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let sides = match plan.pool().kind {
+    let sides = match plan.pools()[0].kind {
         DieKind::Number(n) => n.to_string(),
         // The parser only pairs DigitConcatenate with DieKind::Number.
         DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
             unreachable!("DigitConcatenate requires DieKind::Number")
         }
+        // Narrative dice never reach digit formatting.
+        DieKind::Narrative(_) => unreachable!("narrative dice do not use digit formatting"),
     };
     let prefix =
-        std::iter::repeat_n(sides.as_str(), plan.pool().count as usize).collect::<String>();
+        std::iter::repeat_n(sides.as_str(), plan.pools()[0].count as usize).collect::<String>();
     let dice_str = dice
         .iter()
         .map(|d| d.face.to_string())
@@ -147,11 +228,13 @@ fn format_digit_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String 
 
 /// Format a standard (sum or success-counting) roll.
 fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> String {
-    let kind_str = match plan.pool().kind {
+    let kind_str = match plan.pools()[0].kind {
         DieKind::Number(n) => n.to_string(),
         DieKind::Percent => "%".to_string(),
         DieKind::Fudge => "F".to_string(),
         DieKind::MarvelD6 => "Marvel".to_string(),
+        // Narrative dice never reach standard formatting.
+        DieKind::Narrative(_) => unreachable!("narrative dice do not use standard formatting"),
     };
 
     let mut modifiers: String = modifiers_str(plan);
@@ -163,8 +246,11 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
             Some(cond)
         }
         ScoringMode::Sum => None,
-        // Routed to format_digit_roll or format_marvel_roll before reaching here.
-        ScoringMode::DigitConcatenate | ScoringMode::MarvelMultiverse => unreachable!(),
+        // Routed to format_digit_roll, format_marvel_roll, or
+        // format_narrative_roll before reaching here.
+        ScoringMode::DigitConcatenate
+        | ScoringMode::MarvelMultiverse
+        | ScoringMode::SymbolCancel => unreachable!(),
     };
 
     // Render crit markers: cs before cf, at most one of each.
@@ -187,7 +273,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
             } else if let Some(condition) = success_condition {
                 if condition
                     .compare
-                    .check(d.face.as_numeric(), condition.value)
+                    .check(d.face.numeric_value(), condition.value)
                 {
                     format!("{}*", d.face) // Success counting marker
                 } else {
@@ -204,7 +290,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
         let success_word = if total == 1 { "success" } else { "successes" };
         format!(
             "{}d{}{}{}[{}] = {} {}",
-            plan.pool().count,
+            plan.pools()[0].count,
             kind_str,
             modifiers,
             crit_str,
@@ -215,7 +301,7 @@ fn format_standard_roll(plan: &RollPlan, dice: &[DieResult], total: i64) -> Stri
     } else {
         format!(
             "{}d{}{}{}[{}] = {}",
-            plan.pool().count,
+            plan.pools()[0].count,
             kind_str,
             modifiers,
             crit_str,

@@ -237,7 +237,7 @@ pub(crate) fn simulate_marvel_with_rng(
         let outcome = evaluate_outcome(&expr, rng)?;
         let o = match outcome {
             RollOutcome::Marvel(o) => o,
-            RollOutcome::Numeric(_) | RollOutcome::Successes(_) => {
+            RollOutcome::Numeric(_) | RollOutcome::Successes(_) | RollOutcome::Symbols(_) => {
                 return Err(Error::InvalidMarvelRoll(
                     "Marvel plan produced a non-Marvel outcome".to_string(),
                 ));

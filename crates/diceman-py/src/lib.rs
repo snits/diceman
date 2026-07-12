@@ -7,6 +7,10 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// The scored outcome of a dice roll.
+///
+/// `successes`, `advantages`, `triumphs`, `despairs`, `light`, and `dark`
+/// are populated only for the `"symbols"` kind (narrative Genesys/Star Wars
+/// rolls); they are `None` for every other kind.
 #[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct RollOutcome {
@@ -14,6 +18,18 @@ pub struct RollOutcome {
     pub kind: String,
     #[pyo3(get)]
     pub value: i64,
+    #[pyo3(get)]
+    pub successes: Option<i64>,
+    #[pyo3(get)]
+    pub advantages: Option<i64>,
+    #[pyo3(get)]
+    pub triumphs: Option<u8>,
+    #[pyo3(get)]
+    pub despairs: Option<u8>,
+    #[pyo3(get)]
+    pub light: Option<u8>,
+    #[pyo3(get)]
+    pub dark: Option<u8>,
 }
 
 #[pymethods]
@@ -214,6 +230,35 @@ fn sim_result(result: core::SimResult) -> SimResult {
     }
 }
 
+fn roll_outcome(outcome: core::RollOutcome) -> RollOutcome {
+    let numeric = |kind: &str, value: i64| RollOutcome {
+        kind: kind.to_string(),
+        value,
+        successes: None,
+        advantages: None,
+        triumphs: None,
+        despairs: None,
+        light: None,
+        dark: None,
+    };
+
+    match outcome {
+        core::RollOutcome::Numeric(n) => numeric("numeric", n),
+        core::RollOutcome::Successes(n) => numeric("successes", n),
+        core::RollOutcome::Marvel(o) => numeric("marvel", o.total),
+        core::RollOutcome::Symbols(o) => RollOutcome {
+            kind: "symbols".to_string(),
+            value: o.successes,
+            successes: Some(o.successes),
+            advantages: Some(o.advantages),
+            triumphs: Some(o.triumphs),
+            despairs: Some(o.despairs),
+            light: Some(o.light),
+            dark: Some(o.dark),
+        },
+    }
+}
+
 fn marvel_outcome(outcome: core::MarvelOutcome) -> MarvelOutcome {
     MarvelOutcome {
         total: outcome.total,
@@ -264,19 +309,9 @@ fn marvel_sim_result(result: core::MarvelSimResult) -> MarvelSimResult {
 #[pyfunction]
 fn roll(expr: &str) -> PyResult<RollResult> {
     core::roll(expr)
-        .map(|r| {
-            let (kind, value) = match r.outcome {
-                core::RollOutcome::Numeric(n) => ("numeric", n),
-                core::RollOutcome::Successes(n) => ("successes", n),
-                core::RollOutcome::Marvel(o) => ("marvel", o.total),
-            };
-            RollResult {
-                outcome: RollOutcome {
-                    kind: kind.to_string(),
-                    value,
-                },
-                expression: r.expression,
-            }
+        .map(|r| RollResult {
+            outcome: roll_outcome(r.outcome),
+            expression: r.expression,
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
@@ -471,5 +506,76 @@ mod tests {
         assert_eq!(sim.target, 10);
         assert_eq!(sim.modifier, 0);
         assert_eq!(sim.total.n, 1);
+    }
+
+    #[test]
+    fn roll_outcome_maps_symbols_fields() {
+        let outcome = roll_outcome(core::RollOutcome::Symbols(core::SymbolsOutcome {
+            successes: 2,
+            advantages: -1,
+            triumphs: 1,
+            despairs: 2,
+            light: 3,
+            dark: 4,
+        }));
+
+        assert_eq!(outcome.kind, "symbols");
+        assert_eq!(outcome.value, 2);
+        assert_eq!(outcome.successes, Some(2));
+        assert_eq!(outcome.advantages, Some(-1));
+        assert_eq!(outcome.triumphs, Some(1));
+        assert_eq!(outcome.despairs, Some(2));
+        assert_eq!(outcome.light, Some(3));
+        assert_eq!(outcome.dark, Some(4));
+    }
+
+    #[test]
+    fn roll_outcome_leaves_symbols_fields_none_for_non_symbols_kinds() {
+        let numeric = roll_outcome(core::RollOutcome::Numeric(15));
+        assert_eq!(numeric.kind, "numeric");
+        assert_eq!(numeric.value, 15);
+        assert_eq!(numeric.successes, None);
+        assert_eq!(numeric.advantages, None);
+        assert_eq!(numeric.triumphs, None);
+        assert_eq!(numeric.despairs, None);
+        assert_eq!(numeric.light, None);
+        assert_eq!(numeric.dark, None);
+
+        let successes = roll_outcome(core::RollOutcome::Successes(4));
+        assert_eq!(successes.kind, "successes");
+        assert_eq!(successes.value, 4);
+        assert_eq!(successes.successes, None);
+
+        let marvel = roll_outcome(core::RollOutcome::Marvel(core::MarvelOutcome {
+            total: 13,
+            auto_fail: false,
+            m_shown: true,
+        }));
+        assert_eq!(marvel.kind, "marvel");
+        assert_eq!(marvel.value, 13);
+        assert_eq!(marvel.successes, None);
+    }
+
+    #[test]
+    fn roll_exposes_symbols_kind_and_attributes() {
+        let result = roll("2dAbility&1dDifficulty").unwrap();
+        assert_eq!(result.outcome.kind, "symbols");
+        assert!(result.outcome.successes.is_some());
+        assert!(result.outcome.advantages.is_some());
+        assert!(result.outcome.triumphs.is_some());
+        assert!(result.outcome.despairs.is_some());
+        assert!(result.outcome.light.is_some());
+        assert!(result.outcome.dark.is_some());
+    }
+
+    #[test]
+    fn simulate_over_narrative_notation_raises_non_numeric_outcome_error() {
+        Python::initialize();
+        let err = match simulate("2dAbility&1dDifficulty", 10) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected simulate over narrative notation to fail"),
+        };
+
+        assert!(err.contains("dice result is not numeric and cannot be used in arithmetic"));
     }
 }
