@@ -84,7 +84,10 @@ fn narrative_notation(pools: &[DicePool]) -> String {
         .iter()
         .map(|pool| match pool.kind {
             DieKind::Narrative(die) => format!("{}d{}", pool.count, die),
-            _ => unreachable!("narrative formatting requires narrative die kinds"),
+            // Narrative scoring only ever holds narrative pool groups.
+            DieKind::Number(_) | DieKind::Percent | DieKind::Fudge | DieKind::MarvelD6 => {
+                unreachable!("narrative formatting requires narrative die kinds")
+            }
         })
         .collect::<Vec<_>>()
         .join("&")
