@@ -623,6 +623,23 @@ mod tests {
     }
 
     #[test]
+    fn new_accepts_valid_marvel_plan_with_trouble_and_edge_modifiers() {
+        let result = RollPlan::new(
+            marvel_pool(),
+            vec![
+                RollModifier::Edge {
+                    count: 1,
+                    policy: EdgePolicy::RerollLowest,
+                },
+                RollModifier::Trouble { count: 1 },
+            ],
+            ScoringMode::MarvelMultiverse,
+            vec![AnnotationRule::MarvelFantastic],
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn new_accepts_valid_marvel_plan_with_no_modifiers() {
         let result = RollPlan::new(
             marvel_pool(),
