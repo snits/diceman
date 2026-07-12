@@ -2402,6 +2402,57 @@ mod tests {
         assert_eq!(result.dice.len(), count * 2);
     }
 
+    #[test]
+    fn test_explode_limit_large_user_cap_still_hits_runaway_guard() {
+        // 1d6!200 (limit far above MAX_EXPLOSIONS) with TestRng always
+        // returning 6: the chain never reaches the user cap, so the runaway
+        // guard must still fire. The user cap does not disable the safety net.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(MAX_EXPLOSIONS + 100),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6]); // Wraps around, always returns 6
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::ExplodeLimit(_))));
+    }
+
+    #[test]
+    fn test_explode_limit_is_per_chain_not_pool_wide() {
+        // 2d6!1, TestRng all 6: each of the two originating dice may explode
+        // once independently, so the pool grows from 2 to 4 dice (2 initial +
+        // 2 exploded), sum = 6 * 4 = 24. A pool-wide cap of 1 would instead
+        // give 3 dice and a sum of 18.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(1),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(24));
+    }
+
     // --- Marvel Multiverse scoring tests ---
 
     /// Build a 3dMarvel `Expr` for testing.

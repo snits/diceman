@@ -1826,4 +1826,38 @@ mod tests {
             result.expression
         );
     }
+
+    /// Parse `notation`, roll it, extract the rendered notation prefix from
+    /// `result.expression` (everything before the `[` dice detail), and
+    /// re-parse it. Asserts the re-parsed AST equals the originally parsed
+    /// AST — a genuine round trip, not just a string prefix check.
+    fn assert_reparses_identically(notation: &str) {
+        use crate::roller::evaluate_with_rng;
+        use crate::test_support::TestRng;
+
+        let original = parse(notation).unwrap();
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&original, &mut rng).unwrap();
+        let bracket = result
+            .expression
+            .find('[')
+            .expect("expression should contain a '[' dice detail section");
+        let rendered_notation = &result.expression[..bracket];
+        let reparsed = parse(rendered_notation).unwrap();
+        assert_eq!(
+            original, reparsed,
+            "re-parsing rendered notation {:?} (from {:?}) did not match the original parse of {:?}",
+            rendered_notation, result.expression, notation
+        );
+    }
+
+    #[test]
+    fn test_format_roundtrip_explode_limit_reparses() {
+        assert_reparses_identically("1d6!1");
+    }
+
+    #[test]
+    fn test_format_roundtrip_explode_limit_full_reparses() {
+        assert_reparses_identically("1d6!!p2>4");
+    }
 }
