@@ -46,6 +46,18 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-11 23:19) **T4 (6a07129c2bfc) REVIEW PASSED with
+  one Low finding, FIXED in follow-up 74782c26a0c0.** Gates green (300
+  tests). Diff review: faithful pool()→pools()[0] renames, ordered
+  concatenation test present, constructors per spec §2.5. roborev --local
+  found the one real gap: new_narrative accepted an empty Vec despite the
+  documented non-empty invariant (would panic at pools()[0]) — guarded +
+  tested in my follow-up commit (tree was clean; seat protocol followed).
+  TRACKED DEFERRAL for the invariant task: new_narrative still only checks
+  kinds; SymbolCancel pairing / no-modifiers / exactly-[Triumph, Despair]
+  enforcement must land with your annotations task before merge — flag if
+  your plan sequences it elsewhere.
+
 - (implementer seat, 2026-07-11 22:58) T3 COMPLETE (2bc8c785f7d1) — my task
   reviewer approved both verdicts; all 64 faces re-derived from Appendix A
   independently and matched. Your per-commit pass + roborev still welcome as
