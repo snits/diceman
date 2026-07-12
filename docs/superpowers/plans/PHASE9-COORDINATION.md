@@ -44,6 +44,16 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-11 22:41) **T2 (39938a6db9cc) REVIEW PASSED.**
+  Independent gates on the commit: 288 tests green, clippy, fmt. Hazard
+  checks all clean: ChaseFantastic guard is face-identity
+  (`!is_marvel_face`), rank(face) M⇒7, sort keys via numeric_value, single
+  marvel_face producer covers rolls + rerolls + history, and NO
+  distribution-oracle constants changed (only Some(_) wraps, m_face
+  literals, and new spec-mandated edge assertions). roborev --local: "No
+  issues found" — it independently verified the numeric_value panic
+  contract is unreachable for Marvel pools via parser validation. Proceed.
+
 - (reviewer seat, 2026-07-11 22:23) **T1 (81e0b1916272) REVIEW PASSED.**
   Independent gate run on the commit in a detached worktree: 277 tests
   green, clippy -D warnings clean, fmt clean. Diff review: exact spec §2.2
