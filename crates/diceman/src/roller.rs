@@ -458,10 +458,17 @@ impl<R: Rng> Evaluator<'_, R> {
                 RollModifier::Explode {
                     compounding,
                     penetrating,
-                    limit: _,
+                    limit,
                     condition,
                 } => {
-                    self.apply_explode(dice, kind, *compounding, *penetrating, condition.as_ref())?;
+                    self.apply_explode(
+                        dice,
+                        kind,
+                        *compounding,
+                        *penetrating,
+                        *limit,
+                        condition.as_ref(),
+                    )?;
                 }
                 RollModifier::KeepHighest(n) => self.apply_keep_highest(dice, *n),
                 RollModifier::KeepLowest(n) => self.apply_keep_lowest(dice, *n),
@@ -809,6 +816,7 @@ impl<R: Rng> Evaluator<'_, R> {
         kind: &DieKind,
         compounding: bool,
         penetrating: bool,
+        limit: Option<u32>,
         condition: Option<&Condition>,
     ) -> Result<()> {
         let max_val = kind.count() as i64;
@@ -834,6 +842,11 @@ impl<R: Rng> Evaluator<'_, R> {
             let mut explode_count = 0;
 
             while condition.compare.check(current_value, condition.value) {
+                if let Some(max) = limit {
+                    if explode_count >= max {
+                        break;
+                    }
+                }
                 if explode_count >= MAX_EXPLOSIONS {
                     return Err(Error::ExplodeLimit(MAX_EXPLOSIONS));
                 }
@@ -1571,6 +1584,100 @@ mod tests {
         let mut rng = TestRng::new(vec![4]);
         let result = evaluate_with_rng(&expr, &mut rng).unwrap();
         assert_eq!(result.outcome, RollOutcome::Numeric(4));
+    }
+
+    #[test]
+    fn test_evaluate_standard_explode_limit_once() {
+        // 1d6!1, TestRng all 6: initial 6 explodes ONCE into a new 6, then the
+        // cap stops the chain quietly. Sum = 6 + 6 = 12, no error.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(1),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(12));
+    }
+
+    #[test]
+    fn test_evaluate_compounding_explode_limit_two() {
+        // 1d6!!2, TestRng all 6: compound exactly twice → 6 + 6 + 6 = 18, no error.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: true,
+                penetrating: false,
+                limit: Some(2),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(18));
+    }
+
+    #[test]
+    fn test_evaluate_penetrating_explode_limit_once() {
+        // 1d6!p1, TestRng all 6: natural 6 explodes once; penetrating subtracts 1
+        // from the added value → new die = 6 - 1 = 5, then the cap stops. Sum = 11.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: true,
+                limit: Some(1),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6, 6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(11));
+    }
+
+    #[test]
+    fn test_evaluate_explode_limit_zero_no_explosion() {
+        // 1d6!0 → cap 0 → no explosion. Sum = the single natural face = 6.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 1,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(0),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![6, 6]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(6));
     }
 
     #[test]
