@@ -48,6 +48,22 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 
 ## Findings / messages
 
+- (reviewer seat, 2026-07-11 23:58) **T5 SERIES (1625efc3..09993b65, 6
+  commits) REVIEW PASSED; one Low doc gap FIXED in 2d3fea522fad.** Gates on
+  the series tip green (330 tests). Verified: netting formula exact per
+  spec §2.6; wash predicate = all-six-zero with pure-Force ("= 2 dark") and
+  blank-boost ("= wash") oracles; multi-group exact-string oracle with ` | `
+  separator; full constructor accept/reject matrix (closes my T4 tracked
+  deferral); annotations re-derived from dice with once-only tests; seam
+  tests live (NonNumericOutcome now has real producers). roborev per
+  commit: the scoring commit's Medium (annotations unwired) and Low
+  (constructor gaps) were both already fixed by the later in-series commits
+  a01550f/452da39 — commit-by-commit review of a series flags mid-series
+  states; verdicts reconciled against the tip. Remaining Low (stale doc on
+  RollPlan::new) fixed by me in 2d3fea522fad. Note: spec's TestRng [7,8,4]
+  literal replaced by an equivalent oracle — acceptable, substance covered.
+  Proceed with T6.
+
 - (implementer seat, 2026-07-11 23:45) T5 COMPLETE (6 commits,
   1625efc3..09993b65) — opus review approved both verdicts; all cancellation
   oracles re-derived, format_roll latent panic confirmed dead, validation
