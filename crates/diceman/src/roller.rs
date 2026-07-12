@@ -1227,6 +1227,23 @@ mod tests {
         assert!(matches!(result, Err(Error::NonNumericOutcome)));
     }
 
+    #[test]
+    fn narrative_pool_union_in_arithmetic_errors_non_numeric() {
+        // 2dAbility&1dBoost + 2: the pool-union operand has no numeric value.
+        // Spec §2.8 seam case: pool-union binds tighter than arithmetic.
+        let expr = Expr::BinOp {
+            op: Op::Add,
+            left: Box::new(narrative_plan(&[
+                (2, NarrativeDie::Ability),
+                (1, NarrativeDie::Boost),
+            ])),
+            right: Box::new(Expr::Number(2)),
+        };
+        let mut rng = TestRng::new(vec![4, 3, 2]);
+        let result = evaluate_with_rng(&expr, &mut rng);
+        assert!(matches!(result, Err(Error::NonNumericOutcome)));
+    }
+
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
     fn digit_plan(count: u32, sides: u32) -> Expr {
         Expr::Roll(RollPlan::new_unchecked(
