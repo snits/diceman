@@ -61,8 +61,8 @@ pub mod sim;
 
 pub use ast::{
     Annotation, AnnotationRule, Compare, Condition, DicePool, DieFace, DieKind, EdgePolicy, Expr,
-    Fantastic, MarvelCheck, MarvelOutcome, Op, RollModifier, RollOutcome, RollPlan, ScoringMode,
-    Symbol, SymbolPool,
+    Fantastic, MarvelCheck, MarvelOutcome, NarrativeDie, Op, RollModifier, RollOutcome, RollPlan,
+    ScoringMode, Symbol, SymbolPool,
 };
 pub use error::{Error, Result};
 pub use roller::{

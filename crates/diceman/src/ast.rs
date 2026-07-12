@@ -589,6 +589,8 @@ pub enum DieKind {
     Fudge,
     /// The six-sided Marvel Multiverse die used in a 3dMarvel pool.
     MarvelD6,
+    /// One of the seven Genesys/Star Wars narrative dice.
+    Narrative(NarrativeDie),
 }
 
 impl DieKind {
@@ -599,7 +601,104 @@ impl DieKind {
             DieKind::Percent => 100,
             DieKind::Fudge => 3, // -1, 0, 1
             DieKind::MarvelD6 => 6,
+            DieKind::Narrative(die) => die.count(),
         }
+    }
+}
+
+/// One of the seven Genesys/Star Wars narrative dice.
+///
+/// Genesys checks use Boost/Setback/Ability/Difficulty/Proficiency/Challenge;
+/// Star Wars adds Force. Genesys has no Force die, but diceman does not
+/// enforce that distinction — callers choosing which seven dice to expose is
+/// a parser/CLI concern, not a type-level one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NarrativeDie {
+    Boost,
+    Setback,
+    Ability,
+    Difficulty,
+    Proficiency,
+    Challenge,
+    Force,
+}
+
+impl NarrativeDie {
+    /// Returns the number of sides (faces) for this narrative die.
+    pub fn count(self) -> u32 {
+        match self {
+            NarrativeDie::Boost | NarrativeDie::Setback => 6,
+            NarrativeDie::Ability | NarrativeDie::Difficulty => 8,
+            NarrativeDie::Proficiency | NarrativeDie::Challenge | NarrativeDie::Force => 12,
+        }
+    }
+
+    /// The symbol pool shown on a given roll (1..=`count()`), verified
+    /// against Appendix A of the Phase 9 design doc.
+    pub(crate) fn face(self, roll: u32) -> SymbolPool {
+        use Symbol::*;
+        let symbols: &[Symbol] = match self {
+            NarrativeDie::Boost => match roll {
+                1 | 2 => &[],
+                3 => &[Success],
+                4 => &[Success, Advantage],
+                5 => &[Advantage, Advantage],
+                6 => &[Advantage],
+                _ => unreachable!("Boost roll out of range: {roll}"),
+            },
+            NarrativeDie::Setback => match roll {
+                1 | 2 => &[],
+                3 | 4 => &[Failure],
+                5 | 6 => &[Threat],
+                _ => unreachable!("Setback roll out of range: {roll}"),
+            },
+            NarrativeDie::Ability => match roll {
+                1 => &[],
+                2 | 3 => &[Success],
+                4 => &[Success, Success],
+                5 | 6 => &[Advantage],
+                7 => &[Success, Advantage],
+                8 => &[Advantage, Advantage],
+                _ => unreachable!("Ability roll out of range: {roll}"),
+            },
+            NarrativeDie::Difficulty => match roll {
+                1 => &[],
+                2 => &[Failure],
+                3 => &[Failure, Failure],
+                4..=6 => &[Threat],
+                7 => &[Threat, Threat],
+                8 => &[Failure, Threat],
+                _ => unreachable!("Difficulty roll out of range: {roll}"),
+            },
+            NarrativeDie::Proficiency => match roll {
+                1 => &[],
+                2 | 3 => &[Success],
+                4 | 5 => &[Success, Success],
+                6 => &[Advantage],
+                7..=9 => &[Success, Advantage],
+                10 | 11 => &[Advantage, Advantage],
+                12 => &[Triumph],
+                _ => unreachable!("Proficiency roll out of range: {roll}"),
+            },
+            NarrativeDie::Challenge => match roll {
+                1 => &[],
+                2 | 3 => &[Failure],
+                4 | 5 => &[Failure, Failure],
+                6 | 7 => &[Threat],
+                8 | 9 => &[Failure, Threat],
+                10 | 11 => &[Threat, Threat],
+                12 => &[Despair],
+                _ => unreachable!("Challenge roll out of range: {roll}"),
+            },
+            NarrativeDie::Force => match roll {
+                1..=6 => &[Dark],
+                7 => &[Dark, Dark],
+                8 | 9 => &[Light],
+                10..=12 => &[Light, Light],
+                _ => unreachable!("Force roll out of range: {roll}"),
+            },
+        };
+        SymbolPool::of(symbols)
     }
 }
 
@@ -705,6 +804,175 @@ mod tests {
     #[test]
     fn marvel_d6_has_six_faces() {
         assert_eq!(DieKind::MarvelD6.count(), 6);
+    }
+
+    #[test]
+    fn narrative_die_counts() {
+        assert_eq!(DieKind::Narrative(NarrativeDie::Boost).count(), 6);
+        assert_eq!(DieKind::Narrative(NarrativeDie::Setback).count(), 6);
+        assert_eq!(DieKind::Narrative(NarrativeDie::Ability).count(), 8);
+        assert_eq!(DieKind::Narrative(NarrativeDie::Difficulty).count(), 8);
+        assert_eq!(DieKind::Narrative(NarrativeDie::Proficiency).count(), 12);
+        assert_eq!(DieKind::Narrative(NarrativeDie::Challenge).count(), 12);
+        assert_eq!(DieKind::Narrative(NarrativeDie::Force).count(), 12);
+    }
+
+    /// Asserts every roll 1..=expected.len() on `die` produces the pool built
+    /// from `expected[roll - 1]`, per Appendix A of the Phase 9 design doc.
+    fn assert_die_faces(die: NarrativeDie, expected: &[&[Symbol]]) {
+        assert_eq!(die.count() as usize, expected.len(), "{die:?} face count");
+        for (i, symbols) in expected.iter().enumerate() {
+            let roll = (i + 1) as u32;
+            assert_eq!(
+                die.face(roll),
+                SymbolPool::of(symbols),
+                "{die:?} roll {roll}"
+            );
+        }
+    }
+
+    #[test]
+    fn boost_die_faces() {
+        // blank, blank, S, S+A, A+A, A
+        assert_die_faces(
+            NarrativeDie::Boost,
+            &[
+                &[],
+                &[],
+                &[Symbol::Success],
+                &[Symbol::Success, Symbol::Advantage],
+                &[Symbol::Advantage, Symbol::Advantage],
+                &[Symbol::Advantage],
+            ],
+        );
+    }
+
+    #[test]
+    fn setback_die_faces() {
+        // blank, blank, F, F, T, T
+        assert_die_faces(
+            NarrativeDie::Setback,
+            &[
+                &[],
+                &[],
+                &[Symbol::Failure],
+                &[Symbol::Failure],
+                &[Symbol::Threat],
+                &[Symbol::Threat],
+            ],
+        );
+    }
+
+    #[test]
+    fn ability_die_faces() {
+        // blank, S, S, S+S, A, A, S+A, A+A
+        assert_die_faces(
+            NarrativeDie::Ability,
+            &[
+                &[],
+                &[Symbol::Success],
+                &[Symbol::Success],
+                &[Symbol::Success, Symbol::Success],
+                &[Symbol::Advantage],
+                &[Symbol::Advantage],
+                &[Symbol::Success, Symbol::Advantage],
+                &[Symbol::Advantage, Symbol::Advantage],
+            ],
+        );
+    }
+
+    #[test]
+    fn difficulty_die_faces() {
+        // blank, F, F+F, T, T, T, T+T, F+T
+        assert_die_faces(
+            NarrativeDie::Difficulty,
+            &[
+                &[],
+                &[Symbol::Failure],
+                &[Symbol::Failure, Symbol::Failure],
+                &[Symbol::Threat],
+                &[Symbol::Threat],
+                &[Symbol::Threat],
+                &[Symbol::Threat, Symbol::Threat],
+                &[Symbol::Failure, Symbol::Threat],
+            ],
+        );
+    }
+
+    #[test]
+    fn proficiency_die_faces() {
+        // blank, S, S, S+S, S+S, A, S+A, S+A, S+A, A+A, A+A, TR
+        assert_die_faces(
+            NarrativeDie::Proficiency,
+            &[
+                &[],
+                &[Symbol::Success],
+                &[Symbol::Success],
+                &[Symbol::Success, Symbol::Success],
+                &[Symbol::Success, Symbol::Success],
+                &[Symbol::Advantage],
+                &[Symbol::Success, Symbol::Advantage],
+                &[Symbol::Success, Symbol::Advantage],
+                &[Symbol::Success, Symbol::Advantage],
+                &[Symbol::Advantage, Symbol::Advantage],
+                &[Symbol::Advantage, Symbol::Advantage],
+                &[Symbol::Triumph],
+            ],
+        );
+    }
+
+    #[test]
+    fn challenge_die_faces() {
+        // blank, F, F, F+F, F+F, T, T, F+T, F+T, T+T, T+T, D
+        assert_die_faces(
+            NarrativeDie::Challenge,
+            &[
+                &[],
+                &[Symbol::Failure],
+                &[Symbol::Failure],
+                &[Symbol::Failure, Symbol::Failure],
+                &[Symbol::Failure, Symbol::Failure],
+                &[Symbol::Threat],
+                &[Symbol::Threat],
+                &[Symbol::Failure, Symbol::Threat],
+                &[Symbol::Failure, Symbol::Threat],
+                &[Symbol::Threat, Symbol::Threat],
+                &[Symbol::Threat, Symbol::Threat],
+                &[Symbol::Despair],
+            ],
+        );
+    }
+
+    #[test]
+    fn force_die_faces() {
+        // K, K, K, K, K, K, K+K, L, L, L+L, L+L, L+L (no blanks)
+        assert_die_faces(
+            NarrativeDie::Force,
+            &[
+                &[Symbol::Dark],
+                &[Symbol::Dark],
+                &[Symbol::Dark],
+                &[Symbol::Dark],
+                &[Symbol::Dark],
+                &[Symbol::Dark],
+                &[Symbol::Dark, Symbol::Dark],
+                &[Symbol::Light],
+                &[Symbol::Light],
+                &[Symbol::Light, Symbol::Light],
+                &[Symbol::Light, Symbol::Light],
+                &[Symbol::Light, Symbol::Light],
+            ],
+        );
+    }
+
+    #[test]
+    fn force_die_has_no_blank_faces() {
+        for roll in 1..=NarrativeDie::Force.count() {
+            assert!(
+                !NarrativeDie::Force.face(roll).is_empty(),
+                "Force roll {roll} should not be blank"
+            );
+        }
     }
 
     fn marvel_pool() -> DicePool {

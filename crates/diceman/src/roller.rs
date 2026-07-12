@@ -380,11 +380,15 @@ impl<R: Rng> Evaluator<'_, R> {
     fn roll_pool(&mut self, pool: &DicePool) -> Vec<DieResult> {
         (0..pool.count)
             .map(|i| {
-                let value = self.roll_die(&pool.kind);
-                let face = if pool.kind == DieKind::MarvelD6 {
-                    marvel_face(i as usize, value)
-                } else {
-                    DieFace::Numeric(value)
+                let face = match pool.kind {
+                    DieKind::Narrative(die) => {
+                        let roll = self.rng.roll(die.count());
+                        DieFace::Symbols(die.face(roll))
+                    }
+                    DieKind::MarvelD6 => marvel_face(i as usize, self.roll_die(&pool.kind)),
+                    DieKind::Number(_) | DieKind::Percent | DieKind::Fudge => {
+                        DieFace::Numeric(self.roll_die(&pool.kind))
+                    }
                 };
                 DieResult {
                     face,
@@ -699,6 +703,9 @@ impl<R: Rng> Evaluator<'_, R> {
             DieKind::Percent => self.rng.roll(100) as i64,
             DieKind::Fudge => self.rng.roll(3) as i64 - 2, // -1, 0, 1
             DieKind::MarvelD6 => self.rng.roll(6) as i64,
+            // Narrative dice have no numeric face; roll_pool routes them
+            // through NarrativeDie::face instead of roll_die.
+            DieKind::Narrative(_) => unreachable!("narrative dice do not roll numeric values"),
         }
     }
 
@@ -889,7 +896,7 @@ impl<R: Rng> Evaluator<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::DicePool;
+    use crate::ast::{DicePool, NarrativeDie};
     use crate::test_support::TestRng;
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
@@ -2538,6 +2545,70 @@ mod tests {
             DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
         );
         assert_eq!(dice[2].face.as_numeric(), Some(4));
+    }
+
+    // --- Narrative die pool rolling tests ---
+
+    #[test]
+    fn roll_pool_produces_narrative_symbol_faces() {
+        // A 2-die Ability(d8) pool with rolls 4, 6: roll 4 = S+S, roll 6 = A.
+        let mut rng = TestRng::new(vec![4, 6]);
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        let pool = DicePool {
+            count: 2,
+            kind: DieKind::Narrative(NarrativeDie::Ability),
+        };
+        let dice = evaluator.roll_pool(&pool);
+        assert_eq!(
+            dice[0].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Success, Symbol::Success]))
+        );
+        assert_eq!(
+            dice[1].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Advantage]))
+        );
+        assert_eq!(dice[0].history, vec![dice[0].face]);
+        assert_eq!(dice[1].history, vec![dice[1].face]);
+        assert!(!dice[0].dropped && !dice[1].dropped);
+    }
+
+    /// An `Rng` that asserts every `roll` call requests `expected_max`,
+    /// catching a `roll_pool` narrative branch that requests the wrong
+    /// die's side count.
+    struct AssertingRng {
+        expected_max: u32,
+        value: u32,
+    }
+
+    impl Rng for AssertingRng {
+        fn roll(&mut self, max: u32) -> u32 {
+            assert_eq!(max, self.expected_max, "requested wrong die's side count");
+            self.value
+        }
+    }
+
+    #[test]
+    fn roll_pool_requests_the_rolled_narrative_dies_own_count() {
+        let mut rng = AssertingRng {
+            expected_max: NarrativeDie::Proficiency.count(),
+            value: 12,
+        };
+        let mut evaluator = Evaluator {
+            rng: &mut rng,
+            total_only: false,
+        };
+        let pool = DicePool {
+            count: 1,
+            kind: DieKind::Narrative(NarrativeDie::Proficiency),
+        };
+        let dice = evaluator.roll_pool(&pool);
+        assert_eq!(
+            dice[0].face,
+            DieFace::Symbols(SymbolPool::of(&[Symbol::Triumph]))
+        );
     }
 
     // --- MAX_REROLLS guard tests ---
