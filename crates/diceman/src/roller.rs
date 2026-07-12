@@ -694,8 +694,10 @@ impl<R: Rng> Evaluator<'_, R> {
     /// Mark per-die crit annotations and return pool-level annotations.
     ///
     /// For Marvel rolls, pushes `Fantastic` when the middle die showed M
-    /// and `AutoFail` when the roll was raw `1 / M / 1`. The Marvel facts are
-    /// re-derived from the dice (the source of truth), not from the outcome.
+    /// and `AutoFail` when the roll was raw `1 / M / 1`. For narrative
+    /// (`SymbolCancel`) rolls, pushes `Triumph`/`Despair` once each when those
+    /// symbols are present. In both cases the facts are re-derived from the
+    /// dice (the source of truth), not from the outcome.
     fn apply_annotations(
         dice: &mut [DieResult],
         rules: &[AnnotationRule],
@@ -718,19 +720,33 @@ impl<R: Rng> Evaluator<'_, R> {
             }
         }
 
-        if let ScoringMode::MarvelMultiverse = scoring {
-            debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
-            let (m_shown, auto_fail) = Self::marvel_facts(dice);
-            let mut annotations = Vec::new();
-            if m_shown {
-                annotations.push(Annotation::Fantastic);
+        match scoring {
+            ScoringMode::MarvelMultiverse => {
+                debug_assert!(dice.len() >= 3, "Marvel Multiverse scoring requires 3 dice");
+                let (m_shown, auto_fail) = Self::marvel_facts(dice);
+                let mut annotations = Vec::new();
+                if m_shown {
+                    annotations.push(Annotation::Fantastic);
+                }
+                if auto_fail {
+                    annotations.push(Annotation::AutoFail);
+                }
+                annotations
             }
-            if auto_fail {
-                annotations.push(Annotation::AutoFail);
+            ScoringMode::SymbolCancel => {
+                let merged = Self::merge_symbol_faces(dice);
+                let mut annotations = Vec::new();
+                if merged.contains(Symbol::Triumph) {
+                    annotations.push(Annotation::Triumph);
+                }
+                if merged.contains(Symbol::Despair) {
+                    annotations.push(Annotation::Despair);
+                }
+                annotations
             }
-            annotations
-        } else {
-            Vec::new()
+            ScoringMode::Sum | ScoringMode::CountSuccesses(_) | ScoringMode::DigitConcatenate => {
+                Vec::new()
+            }
         }
     }
 
@@ -1074,6 +1090,37 @@ mod tests {
         let mut rng = TestRng::new(vec![4]);
         let outcome = evaluate_with_rng(&expr, &mut rng).unwrap().outcome;
         assert_eq!(outcome.as_numeric(), None);
+    }
+
+    #[test]
+    fn narrative_pushes_triumph_and_despair_annotations() {
+        // Proficiency roll 12 = Tr, Challenge roll 12 = De.
+        let expr = narrative_plan(&[(1, NarrativeDie::Proficiency), (1, NarrativeDie::Challenge)]);
+        let mut rng = TestRng::new(vec![12, 12]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(
+            result.annotations,
+            vec![Annotation::Triumph, Annotation::Despair]
+        );
+    }
+
+    #[test]
+    fn narrative_omits_absent_annotations() {
+        // Ability roll 4 = SS, Difficulty roll 4 = Th: no Triumph or Despair.
+        let expr = narrative_plan(&[(1, NarrativeDie::Ability), (1, NarrativeDie::Difficulty)]);
+        let mut rng = TestRng::new(vec![4, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert!(result.annotations.is_empty());
+    }
+
+    #[test]
+    fn narrative_pushes_each_annotation_at_most_once() {
+        // Two Proficiency dice both rolling Tr merge to two Triumph symbols,
+        // but the annotation is pushed only once.
+        let expr = narrative_plan(&[(2, NarrativeDie::Proficiency)]);
+        let mut rng = TestRng::new(vec![12, 12]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.annotations, vec![Annotation::Triumph]);
     }
 
     /// Build the lowered `RollPlan` for a digit-dice expression (Dnn).
