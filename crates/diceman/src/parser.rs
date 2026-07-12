@@ -2,8 +2,8 @@
 // ABOUTME: Converts token streams into an AST.
 
 use crate::ast::{
-    AnnotationRule, Compare, Condition, DicePool, DieKind, EdgePolicy, Expr, Op, RollModifier,
-    RollPlan, ScoringMode,
+    AnnotationRule, Compare, Condition, DicePool, DieKind, EdgePolicy, Expr, NarrativeDie, Op,
+    RollModifier, RollPlan, ScoringMode,
 };
 use crate::error::{Error, Result};
 use crate::lexer::{Lexer, Token};
@@ -145,6 +145,12 @@ impl<'a> Parser<'a> {
         // Parse the die kind
         let kind = self.kind()?;
 
+        // Narrative die kinds enter the pool-union production instead of the
+        // regular single-pool modifier/scoring/annotation pipeline.
+        if matches!(kind, DieKind::Narrative(_)) {
+            return self.narrative_roll(count, kind);
+        }
+
         // Parse any modifiers (and success-counting scoring)
         let (modifiers, scoring) = self.modifiers()?;
 
@@ -255,11 +261,126 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(DieKind::MarvelD6)
             }
+            Token::Ability => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Ability))
+            }
+            Token::Boost => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Boost))
+            }
+            Token::Setback => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Setback))
+            }
+            Token::Difficulty => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Difficulty))
+            }
+            Token::Proficiency => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Proficiency))
+            }
+            Token::Challenge => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Challenge))
+            }
+            Token::Force => {
+                self.advance()?;
+                Ok(DieKind::Narrative(NarrativeDie::Force))
+            }
             _ => Err(Error::Expected {
-                expected: "dice sides (number, %, F, or Marvel)".to_string(),
+                expected: "dice sides (number, %, F, Marvel, or a narrative die name)".to_string(),
                 found: format!("{:?}", self.current),
             }),
         }
+    }
+
+    /// Parse the pool-union production: `group ('&' group)*` where the first
+    /// group's kind (already parsed as narrative) is `first_count`/`first_kind`
+    /// and each subsequent group is `count 'd' narrative_kind`.
+    ///
+    /// Binds tighter than all arithmetic — it never leaves this production.
+    /// A non-narrative kind in a later group is rejected here as
+    /// `InvalidNarrativeRoll`; a leading '&' after a non-narrative first
+    /// group is never reached (that path returns from the regular
+    /// single-pool arm in `roll_or_number` instead, leaving '&' for the
+    /// existing trailing-garbage check in `parse`).
+    fn narrative_roll(&mut self, first_count: u32, first_kind: DieKind) -> Result<Expr> {
+        let mut pools = vec![DicePool {
+            count: first_count,
+            kind: first_kind,
+        }];
+
+        while self.current == Token::Ampersand {
+            self.advance()?;
+
+            let count = if let Token::Number(n) = self.current {
+                self.advance()?;
+                n
+            } else {
+                1
+            };
+            self.expect(Token::D)?;
+            let kind = self.kind()?;
+            if !matches!(kind, DieKind::Narrative(_)) {
+                return Err(Error::InvalidNarrativeRoll(format!(
+                    "expected a narrative die kind after '&', found {kind:?}"
+                )));
+            }
+            pools.push(DicePool { count, kind });
+        }
+
+        // Modifiers, success-counting conditions, and crit markers are
+        // parsed (not just left as trailing garbage) so they can be
+        // rejected with a narrative-specific error message.
+        let (modifiers, scoring) = self.modifiers()?;
+        let annotation_rules = self.annotation_rules()?;
+
+        Self::validate_narrative_roll(&pools, &modifiers, &scoring, &annotation_rules)?;
+
+        Ok(Expr::Roll(RollPlan::new_unchecked_pools(
+            pools,
+            vec![],
+            ScoringMode::SymbolCancel,
+            vec![AnnotationRule::Triumph, AnnotationRule::Despair],
+        )))
+    }
+
+    /// Parser-boundary mirror of the Task 5 narrative `RollPlan` invariants
+    /// (the Marvel precedent: `validate_marvel_roll`), checked before the
+    /// `[Triumph, Despair]` annotation rules are auto-pushed so notation
+    /// errors surface with parse-time messages.
+    fn validate_narrative_roll(
+        pools: &[DicePool],
+        modifiers: &[RollModifier],
+        scoring: &ScoringMode,
+        annotation_rules: &[AnnotationRule],
+    ) -> Result<()> {
+        for pool in pools {
+            if pool.count == 0 {
+                return Err(Error::InvalidNarrativeRoll(
+                    "narrative pool groups must roll at least one die".to_string(),
+                ));
+            }
+        }
+        if !modifiers.is_empty() {
+            return Err(Error::InvalidNarrativeRoll(
+                "narrative rolls do not support modifiers".to_string(),
+            ));
+        }
+        if !matches!(scoring, ScoringMode::Sum) {
+            return Err(Error::InvalidNarrativeRoll(
+                "narrative rolls do not support success-counting conditions".to_string(),
+            ));
+        }
+        if !annotation_rules.is_empty() {
+            return Err(Error::InvalidNarrativeRoll(
+                "narrative rolls do not support critical annotations".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn validate_marvel_roll(
@@ -1427,5 +1548,172 @@ mod tests {
     fn test_parse_bare_d_no_kind() {
         let err = parse("d").unwrap_err();
         assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    // --- Narrative notation (spec §2.8 disambiguation matrix) ---
+
+    fn narrative_pool(count: u32, die: NarrativeDie) -> DicePool {
+        DicePool {
+            count,
+            kind: DieKind::Narrative(die),
+        }
+    }
+
+    fn assert_narrative_plan(expr: &Expr, expected_pools: &[DicePool]) {
+        match expr {
+            Expr::Roll(plan) => {
+                assert_eq!(plan.pools(), expected_pools);
+                assert!(plan.modifiers().is_empty());
+                assert_eq!(plan.scoring(), &ScoringMode::SymbolCancel);
+                assert_eq!(
+                    plan.annotation_rules(),
+                    vec![AnnotationRule::Triumph, AnnotationRule::Despair]
+                );
+            }
+            _ => panic!("expected Expr::Roll, got {expr:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_narrative_single_groups() {
+        for (input, die) in [
+            ("2dAbility", NarrativeDie::Ability),
+            ("1dBoost", NarrativeDie::Boost),
+            ("1dSetback", NarrativeDie::Setback),
+            ("2dDifficulty", NarrativeDie::Difficulty),
+            ("1dProficiency", NarrativeDie::Proficiency),
+            ("1dChallenge", NarrativeDie::Challenge),
+            ("1dForce", NarrativeDie::Force),
+        ] {
+            let count = input
+                .chars()
+                .next()
+                .unwrap()
+                .to_digit(10)
+                .expect("test input starts with a digit");
+            let expr = parse(input).unwrap_or_else(|e| panic!("{input} should parse: {e}"));
+            assert_narrative_plan(&expr, &[narrative_pool(count, die)]);
+        }
+    }
+
+    #[test]
+    fn test_parse_narrative_union() {
+        let expr = parse("2dAbility&1dProficiency&2dDifficulty").unwrap();
+        assert_narrative_plan(
+            &expr,
+            &[
+                narrative_pool(2, NarrativeDie::Ability),
+                narrative_pool(1, NarrativeDie::Proficiency),
+                narrative_pool(2, NarrativeDie::Difficulty),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_parse_narrative_duplicate_groups_allowed() {
+        let expr = parse("2dAbility&1dAbility").unwrap();
+        assert_narrative_plan(
+            &expr,
+            &[
+                narrative_pool(2, NarrativeDie::Ability),
+                narrative_pool(1, NarrativeDie::Ability),
+            ],
+        );
+        let Expr::Roll(plan) = &expr else {
+            panic!("expected Expr::Roll");
+        };
+        let total_dice: u32 = plan.pools().iter().map(|p| p.count).sum();
+        assert_eq!(total_dice, 3);
+    }
+
+    #[test]
+    fn test_parse_narrative_case_insensitive() {
+        let expr = parse("2dability&1dPROFICIENCY").unwrap();
+        assert_narrative_plan(
+            &expr,
+            &[
+                narrative_pool(2, NarrativeDie::Ability),
+                narrative_pool(1, NarrativeDie::Proficiency),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_parse_narrative_second_group_non_narrative_errors() {
+        let err = parse("2dAbility&3d6").unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidNarrativeRoll(_)),
+            "expected InvalidNarrativeRoll, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_narrative_first_group_non_narrative_leaves_ampersand_trailing() {
+        let err = parse("3d6&1dAbility").unwrap_err();
+        assert!(
+            matches!(err, Error::Expected { .. }),
+            "expected trailing-garbage Error::Expected, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_narrative_keep_modifier_rejected() {
+        let err = parse("2dAbilitykh1").unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidNarrativeRoll(_)),
+            "expected InvalidNarrativeRoll, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_narrative_success_counting_rejected() {
+        let err = parse("2dAbility>=5").unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidNarrativeRoll(_)),
+            "expected InvalidNarrativeRoll, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_narrative_crit_marker_rejected() {
+        let err = parse("2dAbilitycs5").unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidNarrativeRoll(_)),
+            "expected InvalidNarrativeRoll, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_digit_dice_unaffected_by_narrative_notation() {
+        assert_eq!(parse("D66").unwrap(), digit_plan(2, 6));
+    }
+
+    #[test]
+    fn test_parse_marvel_unaffected_by_narrative_notation() {
+        let expr = parse("3dmarvel").unwrap();
+        assert!(matches!(
+            &expr,
+            Expr::Roll(plan) if plan.pools()[0].kind == DieKind::MarvelD6
+        ));
+    }
+
+    // --- End-to-end: roll() over narrative notation ---
+
+    #[test]
+    fn test_roll_narrative_union_returns_symbols_outcome() {
+        let result = crate::roll("2dAbility&1dDifficulty").unwrap();
+        assert!(matches!(result.outcome, crate::RollOutcome::Symbols(_)));
+    }
+
+    #[test]
+    fn test_roll_narrative_plus_number_errors_non_numeric() {
+        let err = crate::roll("2dAbility + 2").unwrap_err();
+        assert!(matches!(err, Error::NonNumericOutcome));
+    }
+
+    #[test]
+    fn test_roll_grouped_narrative_times_number_errors_non_numeric() {
+        let err = crate::roll("(1dBoost) * 2").unwrap_err();
+        assert!(matches!(err, Error::NonNumericOutcome));
     }
 }
