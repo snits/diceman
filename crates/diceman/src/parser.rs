@@ -1009,8 +1009,8 @@ mod tests {
             let expr = parse(input).unwrap();
             assert!(matches!(
                 &expr,
-                Expr::Roll(plan) if plan.pool().count == 3
-                    && plan.pool().kind == DieKind::MarvelD6
+                Expr::Roll(plan) if plan.pools()[0].count == 3
+                    && plan.pools()[0].kind == DieKind::MarvelD6
                     && plan.modifiers().is_empty()
                     && plan.scoring() == &ScoringMode::MarvelMultiverse
                     && plan.annotation_rules() == vec![AnnotationRule::MarvelFantastic]
@@ -1108,8 +1108,8 @@ mod tests {
             assert!(
                 matches!(
                     &expr,
-                    Expr::Roll(plan) if plan.pool().count == 3
-                        && plan.pool().kind == DieKind::MarvelD6
+                    Expr::Roll(plan) if plan.pools()[0].count == 3
+                        && plan.pools()[0].kind == DieKind::MarvelD6
                         && plan.scoring() == &ScoringMode::MarvelMultiverse
                         && plan.annotation_rules() == vec![AnnotationRule::MarvelFantastic]
                 ),
