@@ -1,7 +1,7 @@
 # Phase 9 Design: Genesys/Star Wars Narrative Dice + Unified Special-Face Model
 
 **Date:** 2026-07-11
-**Status:** Draft (pending design review)
+**Status:** Reviewed (type-design + architecture review findings incorporated)
 **Bead:** diceman-dqh
 **Prior art:** docs/diceman-refactor.md (Phase 9 sketch), docs/diceman-phase8-marvel-plan.md (§3.1 positional-M rationale, superseded by this design)
 
@@ -17,6 +17,11 @@ face is special*. It does NOT move Marvel's pool-level resolution (auto-fail on
 1/M/1, rank-7 for Edge/Trouble, M's 6-or-1 contribution) out of scoring — that
 logic is irreducibly pool-contextual and stays in `score()` / the modifier pass.
 
+Scope call: the Force die (and its Light/Dark axis) is IN scope. The bead and
+refactor doc name "Star Wars narrative dice" alongside Genesys, and the Force
+die is the only Star Wars-specific die; omitting it would leave "Star Wars
+support" hollow.
+
 ## 2. Design decisions
 
 ### 2.1 DieFace shape (the bead's headline question)
@@ -27,31 +32,53 @@ Candidates considered:
   literal reading of "optional symbol set AND optional numeric contribution."
   Rejected: every numeric die pays the churn; no face in scope carries both a
   numeric value and symbols; the both-and-neither corners are dead states.
-- **(b) Enum with a combined variant** `Symbolic { symbols, value: Option<i64> }` —
-  keeps `Numeric` cheap, allows a future face with both. Rejected for now:
-  `value` would be `None` for every producer we have (M's contribution is
-  pool-contextual by design; Genesys faces have no standalone numeric), so the
-  field ships dead. YAGNI.
+- **(b) Enum with a combined variant** `Symbols { symbols, value: Option<i64> }` —
+  keeps `Numeric` cheap, allows a future face with both. Rejected: the `value`
+  field would ship dead. No in-scope face has an intrinsic number to carry —
+  Genesys faces have none, and M's contribution is 6-or-1 *pool-contextual*
+  (roller.rs:587-595), which even `(b)` could not store on the face. That is
+  the strongest argument for (c): the face's job is identity, and any numeric
+  meaning a special face has is resolved in scoring by design.
 - **(c) Enum, symbols-only variant (CHOSEN):**
 
 ```rust
 pub enum DieFace {
     Numeric(i64),
-    Symbolic(SymbolPool),
+    Symbols(SymbolPool),
 }
 ```
 
-This satisfies the unification intent: *which face is special* is carried by
-the face itself (M is `Symbolic` containing `Symbol::M`), not by pool position.
-"Optional numeric contribution" is realized as: numeric faces have one,
-symbolic faces resolve theirs (if any) in scoring — exactly where the bead says
-M's 6/1/rank-7 logic must stay. If a future die needs a face that is
-simultaneously numeric and symbolic, variant (b) is a compatible extension.
+(Variant named `Symbols` matching the bead and refactor doc.) *Which face is
+special* is carried by the face itself (M is `Symbols` containing
+`Symbol::Marvel`), not by pool position. Moving to (b) later is a mechanical
+breaking refactor (tuple → struct variant, every match arm + serde shape), not
+a compatible extension — acceptable for a v0.x crate and not a reason to ship
+a dead field now.
 
-`DieFace::as_numeric()` changes `i64 -> Option<i64>` (breaking, v0.5.0).
-Numeric-only contexts (Sum/CountSuccesses/DigitConcatenate scoring, crit
-checks, success markers) unwrap with an expect stating the contract, which
-`RollPlan::new` validation makes unreachable (§2.5).
+**`DieFace::as_numeric()` changes `i64 -> Option<i64>` (breaking, v0.5.0).**
+The migration has two distinct classes of call site — implementers must not
+blur them:
+
+1. **Numeric-by-construction sites** (Sum/CountSuccesses/DigitConcatenate
+   scoring at roller.rs:557,566,573; crit checks roller.rs:641,644; reroll /
+   explode / keep-drop sorts; format success markers): faces are `Numeric`
+   because parser validation pairs those scoring modes and modifiers only with
+   numeric die kinds. These use a private `DieFace::numeric_value(self) -> i64`
+   helper carrying the contract panic message once, instead of scattering
+   `.expect()` strings.
+2. **Marvel identity sites — genuine face-matching rewrites, NEVER
+   `numeric_value`** (a `.expect()` here would panic exactly when M shows):
+   - `score()` Marvel arm middle-die extraction (roller.rs:583-585) and
+     `marvel_facts` (roller.rs:613-619): match the face — `Symbols` containing
+     `Marvel` ⇒ M (contribute 6, or 1 on auto-fail); `Numeric(n)` ⇒ n.
+   - `marvel_rank` (roller.rs:478) becomes `rank(face)`: M face ⇒ 7, numeric ⇒
+     value; `lowest/highest_rank_index` (roller.rs:534,543) pass faces, not
+     extracted i64s.
+   - ChaseFantastic guard (roller.rs:495): "middle die is not the M face"
+     replaces `as_numeric() != 1`.
+   - `apply_edge`/`apply_trouble` old/new face handling (roller.rs:502-508,
+     521-527) — see §2.3.
+   - `format_marvel_roll` (format.rs:49) renders via face identity/`Display`.
 
 ### 2.2 Symbol and SymbolPool
 
@@ -69,12 +96,22 @@ pub struct SymbolPool { counts: [u8; 9] }
 ```
 
 - Constructors/helpers: `SymbolPool::new()`, `of(&[Symbol])`, `count(Symbol)`,
-  `add(Symbol, n)`, `merge(&SymbolPool)`, `is_empty()`.
-- `Copy + Eq + Hash`-able, serde behind the existing feature flag; keeps
-  `DieFace` `Copy` (9 bytes of counts).
-- A Genesys blank face is `Symbolic(SymbolPool::new())` — a real face that
+  `add(Symbol, n)`, `merge(&SymbolPool)`, `contains(Symbol)`, `is_empty()`.
+- `Copy + Eq + Hash`-able; keeps `DieFace` `Copy` (9 bytes of counts).
+- Counts saturate on add/merge (`u8::MAX` cap). Realistic pools are <12 dice
+  with ≤2 symbols per face; saturation is a documented safety net, not a
+  behavior anyone should reach.
+- Serde: custom `Serialize`/`Deserialize` as a self-describing map of symbol
+  name → count with zero counts omitted (e.g. `{"Success":1,"Advantage":2}`),
+  NOT the opaque positional array the derive would emit. The JSON die-face
+  shape is a public CLI surface.
+- `Symbol` spans two disjoint systems (Genesys/SW symbols vs Marvel's M);
+  pools from the two systems never merge — plan validation keeps Marvel and
+  narrative dice out of each other's scoring modes, and `SymbolsOutcome` has
+  no Marvel field by design.
+- A Genesys blank face is `Symbols(SymbolPool::new())` — a real face that
   rolled, with nothing on it.
-- Marvel's M face is `Symbolic(SymbolPool::of(&[Symbol::Marvel]))`.
+- Marvel's M face is `Symbols(SymbolPool::of(&[Symbol::Marvel]))`.
 
 ### 2.3 Marvel retrofit
 
@@ -82,21 +119,27 @@ Positional encoding is removed from *interpretation* sites; die *production*
 keeps position-awareness because that is physical reality (the middle die of a
 d616 pool IS the Marvel die — it has an M face; the outer dice don't).
 
-- `roll_pool` for a `MarvelD6` group: index 1 rolls the M-capable die (a raw 1
-  produces `Symbolic({Marvel})`, 2–6 produce `Numeric`); indices 0 and 2
-  produce plain `Numeric` faces. Edge/Trouble rerolls use the same per-index
-  producer.
-- `marvel_rank(face)` loses its index parameter: a face containing
-  `Symbol::Marvel` ranks 7; numeric faces rank at value.
-- `marvel_facts` / scoring: `m_shown` = middle face contains `Symbol::Marvel`;
-  `auto_fail` = faces are `[1, M, 1]`; M contributes 6, or 1 on auto-fail —
-  unchanged pool-contextual logic, now keyed off the face identity instead of
-  `index == 1 && face == 1`.
-- `format_marvel_roll` renders the face (`Display` for an M face is `"M"`)
-  instead of checking position.
-- `MarvelOutcome`, `MarvelCheck`, Edge/Trouble notation, typed Marvel APIs,
-  and all distribution oracles are behavior-invariant. JSON die-face shape for
-  the M face changes (`Numeric(1)` → `Symbolic({Marvel})`) — breaking, flagged.
+- A per-index Marvel face producer (`roll 1..=6; index 1 && raw 1 ⇒
+  Symbols({Marvel}); else Numeric(raw)`) is used by BOTH `roll_pool` for
+  `MarvelD6` groups AND every Edge/Trouble reroll. `apply_edge`/`apply_trouble`
+  currently hard-write `DieFace::Numeric(new_face)` into `.face` and
+  `.history` (roller.rs:506,508,525,527); they must thread through the
+  producer so a rerolled natural 1 on index 1 becomes the M face — in history
+  too. An outer die (index 0/2) rolling 1 stays `Numeric(1)`, rank 1.
+- Rank comparisons in Edge/Trouble compare produced faces via `rank(face)`
+  (M ⇒ 7), replacing the extract-then-rank-by-index dance.
+- `marvel_facts` / scoring: `m_shown` = middle face is the M face; `auto_fail`
+  = faces are `[Numeric(1), M, Numeric(1)]`; M contributes 6, or 1 on
+  auto-fail — unchanged pool-contextual logic, keyed off face identity.
+- **Behavior invariance, stated precisely:** all runtime verdicts (totals,
+  auto_fail, m_shown, Edge/Trouble selection, every exhaustive-enumeration
+  distribution oracle at roller.rs:2175-2249) are preserved. Two
+  representation-level assertions change and must be updated, not deleted:
+  roller.rs:2164 (`dice[1].face == Numeric(1)` ⇒ the M face) and
+  roller.rs:2166-2168 (history `[Numeric(1), Numeric(1)]` ⇒ two M faces).
+  JSON die-face shape for the M face changes accordingly — breaking, flagged.
+- `MarvelOutcome`, `MarvelCheck`, Edge/Trouble notation, and typed Marvel APIs
+  are unchanged.
 
 ### 2.4 Narrative dice
 
@@ -130,13 +173,32 @@ Difficulty + …). Candidates:
   contained-evaluator anti-pattern Phase 8 explicitly retired.
 - **(b) Heterogeneous DicePool** `{ groups: Vec<(u32, DieKind)> }` — honest but
   forces churn/allocation onto every numeric roll site.
-- **(c) RollPlan holds pool groups (CHOSEN):** `RollPlan.pools: Vec<DicePool>`
-  (invariant: non-empty; `len > 1` only when every group is
-  `DieKind::Narrative`). Existing behavior is `len == 1` everywhere else.
-  `pool()` getter becomes `pools() -> &[DicePool]` (breaking; fields are
-  already private so the change is contained).
+- **(c) RollPlan holds pool groups (CHOSEN):** internal storage becomes
+  `pools: Vec<DicePool>` (invariant: non-empty; `len > 1` only when every
+  group is `DieKind::Narrative`).
 
-`RollPlan::new` invariants extend (Marvel precedent, type-level enforcement):
+Churn containment (the getter/constructor strategy):
+
+- `pools() -> &[DicePool]` replaces the `pool()` getter (breaking; call sites:
+  roller.rs:328-329, format.rs:69,131,139,150,207,218, parser tests).
+- `RollPlan::new(pool, ...)` keeps its single-pool signature (existing
+  callers/tests compile modulo the validation additions); a new
+  `RollPlan::new_narrative(pools, ...)` takes the group list. Internally both
+  fill `pools`. `new_unchecked(pool, ...)` likewise stays single-pool; a
+  `pub(crate) new_unchecked_pools(Vec<DicePool>, ...)` serves the parser's
+  narrative arm.
+- `evaluate_roll`/`roll_pool` iterate the groups and concatenate `DieResult`s
+  in group order, then score once over the flat slice.
+
+**Where validation actually lives (corrected attribution):** the production
+path is the parser — `validate_marvel_roll` (parser.rs:160) today, joined by a
+`validate_narrative_roll` mirror. `RollPlan::new` is the *external-caller*
+surface (the parser and roller use `new_unchecked`); it mirrors the same
+checks so library consumers constructing plans programmatically get the same
+`Result`-based runtime enforcement. None of this is type-level; the type-level
+piece of this design is `DieFace` itself carrying face identity.
+
+Invariants (enforced in both `validate_narrative_roll` and `RollPlan::new*`):
 
 - `ScoringMode::SymbolCancel` ⟺ all groups are `Narrative` (both directions).
 - Narrative plans: no modifiers (Genesys has no keep/reroll/explode/Edge);
@@ -144,14 +206,19 @@ Difficulty + …). Candidates:
 - Non-narrative plans: exactly one pool group; no Triumph/Despair rules.
 - New `Error::InvalidNarrativeRoll(String)` mirroring `InvalidMarvelRoll`.
 
+What keeps symbolic faces out of numeric-only scoring arms is this validation
+plus production: numeric kinds produce only `Numeric` faces; narrative kinds
+are locked to `SymbolCancel`; MarvelD6 is locked to `MarvelMultiverse`.
+
 ### 2.6 Scoring: SymbolCancel
 
-`score()` merges all (never-dropped) faces' SymbolPools, then cancels:
+`score()` merges all faces' SymbolPools (narrative pools have no dropped
+dice — no drop-producing modifiers exist on them), then cancels:
 
 ```rust
 pub struct SymbolsOutcome {
-    pub successes: i64,   // net: successes (+ triumphs) - failures (- despairs); negative = net failure
-    pub advantages: i64,  // net: advantages - threats; negative = net threat
+    pub successes: i64,   // net: (S + TR) - (F + D); negative = net failure
+    pub advantages: i64,  // net: A - T; negative = net threat
     pub triumphs: u8,     // reported regardless of cancellation
     pub despairs: u8,
     pub light: u8,        // Force points; never cancel
@@ -164,19 +231,32 @@ pub enum RollOutcome {
 }
 ```
 
+`SymbolsOutcome` derives `Debug, Clone, Copy, PartialEq, Eq` + serde behind
+the feature flag, matching `MarvelOutcome` (ast.rs:281-282), so `RollOutcome`
+stays `Copy`/`Eq`.
+
 Cancellation rules (verified, Appendix A): each Triumph adds one Success and
 each Despair adds one Failure to the net computation, while the Triumph/Despair
-counts themselves are reported uncancelled; Light/Dark never cancel.
+counts themselves are reported uncancelled; Light/Dark never cancel. Reporting
+*signed nets* is information-equivalent to the rulebook's max(0, …) pairs; "a
+check succeeds iff net ≥ 1" is the consuming game's interpretation — diceman
+reports facts and deliberately has no `success` boolean here.
+
 `RollOutcome::as_numeric()` returns `None` for `Symbols` — the first real
 producer for `Error::NonNumericOutcome` at the arithmetic seam (`2dAbility + 2`
-errors; `evaluate_total`/sim over a narrative expression errors cleanly).
+errors; `evaluate_total`/sim over a narrative expression errors cleanly). The
+"unreachable until Phase 9" comments at roller.rs:125-126 and 273-275 are
+removed as part of wiring the real tests.
 
 ### 2.7 Annotations
 
-`AnnotationRule::Triumph` / `AnnotationRule::Despair`, auto-pushed by the
-parser for narrative pools (Marvel precedent). `apply_annotations` pushes
-`Annotation::Triumph` / `Annotation::Despair` when the respective outcome count
-is > 0 (once each, not per-symbol — matching `Fantastic`'s pool-level style).
+`AnnotationRule::Triumph` / `AnnotationRule::Despair` (new variants),
+auto-pushed by the parser for narrative pools (Marvel precedent).
+`apply_annotations` keeps its `(dice, rules, scoring)` signature and
+*re-derives* triumph/despair presence by re-merging the faces — exactly the
+`marvel_facts` pattern (dice are the source of truth; no outcome threading).
+It pushes `Annotation::Triumph` / `Annotation::Despair` (new variants) once
+each when present (pool-level style, matching `Fantastic`).
 
 ### 2.8 Notation surface
 
@@ -187,16 +267,40 @@ Full-word die names joined by `&` into one roll plan:
 1dForce
 ```
 
-- Word tokens follow the `marvel` lexer pattern with one-char peek
-  disambiguation: `F`+`orce` vs `Fudge`, `D`+`ifficulty` vs `DigitD`,
-  `P`+`roficiency` vs penetrating-`p`, `C`+`hallenge` vs `cs`/`cf`,
-  `S`etback/`A`bility/`B`oost on currently-unused letters. Case-insensitive
-  like `marvel`.
-- `&` (new `Token::Ampersand`) is the pool-union operator, valid only between
-  narrative groups; using it with non-narrative kinds is a parse error.
-  Arithmetic operators around narrative rolls parse but fail at evaluation
-  with `NonNumericOutcome` (the seam under test).
-- No modifiers or success-counting conditions are accepted on narrative groups.
+**Lexer.** Word tokens follow the `marvel` pattern, case-insensitive. Letter
+dispositions (verified against lexer.rs:99-217):
+
+- `A`bility, `B`oost, `S`etback: first letters currently unused — plain word
+  match.
+- `F`+`orce` vs `Fudge`, `D`+`ifficulty` vs `DigitD`, `C`+`h`allenge vs
+  `cs`/`cf`: one-char peek suffices — in today's grammar those second
+  characters are errors, so no valid notation changes meaning.
+- **`P`roficiency vs penetrating-`p`: one-char peek is NOT safe.** `1d6!pr`
+  is valid today (penetrating explode + reroll: parser.rs:401 consumes `!p`,
+  the modifier loop takes `r`), so `p`+peek-`r` must not commit to a word.
+  Use full-word lookahead-with-restore: attempt to match `roficiency` on a
+  cloned iterator; on full match emit the word token, on any mismatch emit
+  `Token::P` having consumed only the `p`. Regression test `1d6!pr` required.
+- `&` becomes `Token::Ampersand`.
+
+**Parser.** `&` is not a BinOp — it is a pool-union production inside the roll
+factor, entered only after the first group's kind parses as narrative:
+`narrative_roll := group ('&' group)*` where `group := count 'd' narrative_kind`.
+Semantics:
+
+- Binds tighter than all arithmetic (it never leaves the roll production);
+  `2dAbility&1dBoost+2` parses as `(2dAbility&1dBoost) + 2` and then fails at
+  evaluation with `NonNumericOutcome` (the seam under test).
+- `2dAbility&3d6` (second group non-narrative) → `InvalidNarrativeRoll` at
+  parse time. `3d6&…` (first group non-narrative) → the roll production ends
+  before `&`; `parse()`'s end-of-input check yields the existing
+  `Error::Expected` (current behavior for trailing garbage).
+- Duplicate groups (`2dAbility&1dAbility`) are explicitly allowed — they just
+  add dice to the pool.
+- Whitespace around `&` follows the lexer's existing whitespace handling.
+- No modifiers, success-counting conditions, or crit markers on narrative
+  groups; scoring is forced to `SymbolCancel`; `[Triumph, Despair]`
+  auto-pushed.
 - Compact single-letter color notation (`ggypp`) rejected for v1: collides
   with existing modifier letters (`k`, `r`, `p`) and diceman's `NdX` grammar;
   the CLI subcommand supplies the ergonomic entry point.
@@ -206,52 +310,66 @@ Full-word die names joined by `&` into one roll plan:
 - `format_roll` becomes exhaustive over `RollOutcome` variants (kills the
   `_`-arm `.expect()` latent panic flagged in the bead comment): `Marvel` →
   `format_marvel_roll`, `Symbols` → new `format_narrative_roll`,
-  `Numeric | Successes` → existing numeric paths with the total bound directly.
-- Face display (`Display for DieFace`): numeric as today; symbolic faces as
-  concatenated symbol abbreviations — `S` Success, `A` Advantage, `Tr` Triumph,
+  `Numeric(n) | Successes(n)` → existing numeric paths with `n` bound
+  directly. The inner `plan.scoring()` match in the numeric arm gains
+  `SymbolCancel => unreachable!()` (routed via the outer `Symbols` arm) to
+  stay exhaustive.
+- Face display (`Display for DieFace`): numeric as today; symbol faces as
+  concatenated abbreviations — `S` Success, `A` Advantage, `Tr` Triumph,
   `F` Failure, `Th` Threat, `De` Despair, `L` Light, `Dk` Dark, `M` Marvel;
   blank face renders `-`.
 - Narrative roll rendering:
   `2dAbility&1dDifficulty[S, SA | Th] = 1 success, 1 advantage, 1 threat`
-  (groups separated by ` | ` in pool order; outcome as a comma list of net
-  facts, including `1 triumph` / `1 despair` when present; `wash` when
-  everything nets to zero).
+  — groups separated by ` | ` in pool order; outcome as a comma list of net
+  facts (`N success(es)`/`N failure(s)` from the signed net, same for
+  advantage/threat, plus `N triumph(s)` / `N despair(s)` / `N light` /
+  `N dark` when nonzero); `wash` when everything nets to zero.
+  Group boundaries are re-derived from `pools()` counts — valid precisely
+  because narrative pools admit no dice-count-changing modifiers; if a
+  narrative modifier is ever added, this derivation must be revisited (noted
+  in code).
 
 ### 2.10 CLI
 
-New `genesys` subcommand (Marvel precedent):
+New `genesys` subcommand (Marvel precedent, long flags matching the `marvel`
+subcommand style):
 
 ```
-diceman genesys [-a N] [-p N] [-b N] [-d N] [-c N] [-s N] [-f N] [--json]
+diceman genesys [--ability N] [--proficiency N] [--boost N]
+                [--difficulty N] [--challenge N] [--setback N]
+                [--force N] [--json]
 ```
 
-(ability/proficiency/boost/difficulty/challenge/setback/force). Builds the
-notation string, runs the normal pipeline, prints the formatted roll; `--json`
-serializes the `RollResult`. At least one die required. `roll`/`sim`
-subcommands work unchanged (`sim` over narrative errors cleanly with the
-NonNumericOutcome message). `diceman notation` gains a narrative section.
+Builds the notation string and runs the normal `roll` pipeline (no typed
+Genesys API — not in bead scope; the notation covers it), prints the formatted
+roll; `--json` serializes the `RollResult`. At least one die required.
+`roll`/`sim` subcommands work unchanged (`sim` over narrative errors cleanly
+with the NonNumericOutcome message). `diceman notation` gains a narrative
+section.
 
 ### 2.11 Python bindings
 
 Generic `roll()` gains an outcome kind `"symbols"` exposing `successes`,
-`advantages`, `triumphs`, `despairs`, `light`, `dark`. The flat `RollOutcome`
-pyclass (`kind`, `value`) grows optional symbol fields (`None`/0 for other
-kinds); `value` carries net successes for `"symbols"` so existing consumers
-keep a numeric handle. No typed `roll_genesys` API in this phase (not in bead
-scope; the notation covers it).
-`simulate()` over a narrative expression raises the existing `ValueError`
-mapping of `NonNumericOutcome`.
+`advantages`, `triumphs`, `despairs`, `light`, `dark`. No typed
+`roll_genesys` API in this phase. `simulate()` over a narrative expression
+raises the existing `ValueError` mapping of `NonNumericOutcome`.
 
-### 2.12 Versioning
+### 2.12 Versioning and breaking changes
 
-Breaking: `DieFace::as_numeric` signature, new `DieFace`/`RollOutcome`
-variants, `RollPlan::pool()` → `pools()`, JSON shapes (M face, new outcome
-kind). Core bumps to v0.5.0; workspace crates follow.
+Core bumps to v0.5.0; workspace crates follow. Breaking surface:
+
+- `DieFace::as_numeric` returns `Option<i64>`; new `DieFace::Symbols` variant.
+- New `RollOutcome::Symbols` variant.
+- `RollPlan::pool()` getter → `pools()`; `new_narrative` added.
+- JSON shapes: M face serializes as `Symbols` with the symbol map (was
+  `Numeric(1)`); new `symbols` outcome kind; `SymbolPool` map form.
+- New `Error::InvalidNarrativeRoll` variant.
 
 ## 3. What does NOT change
 
-- Marvel distribution oracles, Edge/Trouble semantics, typed Marvel APIs.
-- Numeric/Percent/Fudge/D66 behavior and notation.
+- Marvel distribution oracles, Edge/Trouble semantics, typed Marvel APIs,
+  Marvel notation.
+- Numeric/Percent/Fudge/D66 behavior and notation (`1d6!pr` regression-locked).
 - The pipeline stages and their order.
 - `Error::NonNumericOutcome` semantics (it finally fires for real).
 
@@ -260,15 +378,20 @@ kind). Core bumps to v0.5.0; workspace crates follow.
 - TDD throughout, `TestRng` for deterministic faces.
 - Face-table oracles: every face of all seven dice asserted against Appendix A.
 - Cancellation oracles: hand-computed mixed-pool cases including
-  triumph-implicit-success cancellation, net-negative results, wash, Force.
-- Marvel regression: existing exhaustive-enumeration oracles must pass
-  unchanged (the retrofit is behavior-invariant by construction).
+  triumph-implicit-success cancellation, net-negative results, wash (tie →
+  zero nets), Force light/dark isolation.
+- Marvel regression: exhaustive-enumeration distribution oracles pass
+  unchanged; the two representation-level tests (roller.rs:2164, 2166-2168)
+  updated to the M face per §2.3; rerolled-M (Edge reroll landing on middle-die
+  1) asserted as the M face in face AND history.
 - Arithmetic seam: `2dAbility + 2`, `(1dBoost) * 2`, `sim` over narrative —
   all error with `NonNumericOutcome`.
-- Parser/lexer: word-token disambiguation matrix (`1dF` Fudge vs `1dForce`;
-  `D66` vs `2dDifficulty`; `!p` vs `1dProficiency`; `cs6` vs `1dChallenge`),
-  `&` rejection for non-narrative kinds, modifier rejection on narrative pools.
-- Serde snapshots for the new shapes.
+- Parser/lexer disambiguation matrix: `1dF` Fudge vs `1dForce`; `D66` vs
+  `2dDifficulty`; **`1d6!pr` unchanged** vs `1dProficiency`; `cs6`/`cf1` vs
+  `1dChallenge`; `&` with non-narrative kinds rejected; modifiers rejected on
+  narrative pools; duplicate groups accepted.
+- Serde snapshots for the new shapes (M face, symbol-map SymbolPool,
+  `symbols` outcome kind).
 
 ## Appendix A: Verified narrative die face tables
 
