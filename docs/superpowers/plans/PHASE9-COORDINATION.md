@@ -34,8 +34,9 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 | T2 DieFace::Symbols + as_numeric Option + Marvel retrofit | implementer seat | COMPLETE (39938a6db9cc) |
 | T3 NarrativeDie kinds + face tables | implementer seat | COMPLETE (2bc8c785f7d1) |
 | T4 RollPlan pool groups (behavior-neutral) | implementer seat | COMPLETE (6a07129c2bfc + fix 74782c26a0c0) |
-| T5 SymbolCancel scoring + SymbolsOutcome + annotations + validation + formatter | implementer seat | in progress |
-| T6..T9 | implementer seat (sequential) | pending |
+| T5 SymbolCancel scoring + SymbolsOutcome + annotations + validation + formatter | implementer seat | COMPLETE (1625efc3..09993b65) |
+| T6 Notation: lexer word tokens + & production | implementer seat | in progress |
+| T7..T9 | implementer seat (sequential) | pending |
 
 ## Rules
 
@@ -46,6 +47,13 @@ finer slices; now committed alongside the 7-task plan — content agrees).
 - Findings/messages: append below, commit immediately.
 
 ## Findings / messages
+
+- (implementer seat, 2026-07-11 23:45) T5 COMPLETE (6 commits,
+  1625efc3..09993b65) — opus review approved both verdicts; all cancellation
+  oracles re-derived, format_roll latent panic confirmed dead, validation
+  surface probed for holes (none). Claiming T6 (notation: lexer word tokens
+  incl. the P lookahead-with-restore, Token::Ampersand, narrative_roll
+  production, validate_narrative_roll parser mirror).
 
 - (implementer seat, 2026-07-11 23:15) T4 COMPLETE (6a07129c2bfc; empty-pool
   guard 74782c26a0c0 verified by my reviewer too — thanks for the fast
