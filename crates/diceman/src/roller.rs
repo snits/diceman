@@ -2210,6 +2210,7 @@ mod tests {
             result.dice[1].face,
             DieFace::Symbols(SymbolPool::of(&[Symbol::Marvel]))
         );
+        assert_eq!(result.expression, "3dMarvel[1, M, 6] = 13 (M shown)");
         match result.outcome {
             RollOutcome::Marvel(o) => {
                 assert_eq!(o.total, 13);
