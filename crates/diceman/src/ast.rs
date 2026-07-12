@@ -63,59 +63,10 @@ impl RollPlan {
         scoring: ScoringMode,
         annotation_rules: Vec<AnnotationRule>,
     ) -> Result<Self> {
-        let marvel_scoring = matches!(scoring, ScoringMode::MarvelMultiverse);
-        let marvel_kind = pool.kind == DieKind::MarvelD6;
-
-        if marvel_scoring != marvel_kind {
-            return Err(Error::InvalidMarvelRoll(format!(
-                "MarvelMultiverse scoring and MarvelD6 pool kind must be used together \
-                 (scoring is MarvelMultiverse: {marvel_scoring}, kind is MarvelD6: {marvel_kind})"
-            )));
-        }
-
-        if marvel_scoring {
-            if pool.count != 3 {
-                return Err(Error::InvalidMarvelRoll(format!(
-                    "expected 3 dice, found {}",
-                    pool.count
-                )));
-            }
-            for modifier in &modifiers {
-                if !matches!(
-                    modifier,
-                    RollModifier::Edge { .. } | RollModifier::Trouble { .. }
-                ) {
-                    return Err(Error::InvalidMarvelRoll(format!(
-                        "{modifier:?} is not supported on Marvel rolls; only Edge and Trouble"
-                    )));
-                }
-            }
-            if annotation_rules != [AnnotationRule::MarvelFantastic] {
-                return Err(Error::InvalidMarvelRoll(
-                    "Marvel rolls must carry exactly one MarvelFantastic annotation rule"
-                        .to_string(),
-                ));
-            }
-        } else {
-            for modifier in &modifiers {
-                if matches!(
-                    modifier,
-                    RollModifier::Edge { .. } | RollModifier::Trouble { .. }
-                ) {
-                    return Err(Error::InvalidMarvelRoll(format!(
-                        "{modifier:?} is only supported on Marvel rolls"
-                    )));
-                }
-            }
-            if annotation_rules.contains(&AnnotationRule::MarvelFantastic) {
-                return Err(Error::InvalidMarvelRoll(
-                    "MarvelFantastic annotation is only supported on Marvel rolls".to_string(),
-                ));
-            }
-        }
-
+        let pools = vec![pool];
+        Self::validate(&pools, &modifiers, &scoring, &annotation_rules)?;
         Ok(Self {
-            pools: vec![pool],
+            pools,
             modifiers,
             scoring,
             annotation_rules,
@@ -125,10 +76,9 @@ impl RollPlan {
     /// Build a `RollPlan` over multiple narrative pool groups.
     ///
     /// Rejects an empty group list and any group whose kind is not
-    /// `DieKind::Narrative`. The rest of the narrative invariant set
-    /// (`ScoringMode::SymbolCancel` pairing, modifier/annotation shape) is
-    /// enforced by `validate_narrative_roll` at the parser boundary and lands
-    /// here in a later change.
+    /// `DieKind::Narrative`, then enforces the full narrative invariant set
+    /// (`ScoringMode::SymbolCancel` pairing, no modifiers, non-empty groups,
+    /// and exactly the `[Triumph, Despair]` annotation rules) via `validate`.
     pub fn new_narrative(
         pools: Vec<DicePool>,
         modifiers: Vec<RollModifier>,
@@ -149,12 +99,154 @@ impl RollPlan {
             }
         }
 
+        Self::validate(&pools, &modifiers, &scoring, &annotation_rules)?;
         Ok(Self::new_unchecked_pools(
             pools,
             modifiers,
             scoring,
             annotation_rules,
         ))
+    }
+
+    /// Enforce the plan invariants shared by `new` and `new_narrative`.
+    ///
+    /// `ScoringMode::SymbolCancel` and all-narrative pool groups imply each
+    /// other (both directions). Narrative plans carry no modifiers, roll at
+    /// least one die per group, and carry exactly the `[Triumph, Despair]`
+    /// annotation rules. Non-narrative plans hold a single pool group, reject
+    /// Triumph/Despair rules, and satisfy the Marvel Multiverse invariant.
+    ///
+    /// The `len > 1 => all narrative` constraint is current scope, not domain
+    /// law (see spec §2.5): pool union only has meaning where scoring is
+    /// pool-wide.
+    fn validate(
+        pools: &[DicePool],
+        modifiers: &[RollModifier],
+        scoring: &ScoringMode,
+        annotation_rules: &[AnnotationRule],
+    ) -> Result<()> {
+        let all_narrative = pools
+            .iter()
+            .all(|p| matches!(p.kind, DieKind::Narrative(_)));
+        let symbol_cancel = matches!(scoring, ScoringMode::SymbolCancel);
+
+        if symbol_cancel != all_narrative {
+            return Err(Error::InvalidNarrativeRoll(
+                if symbol_cancel {
+                    "SymbolCancel scoring requires every pool group to be a narrative die kind"
+                } else {
+                    "narrative pool groups require SymbolCancel scoring"
+                }
+                .to_string(),
+            ));
+        }
+
+        if symbol_cancel {
+            if !modifiers.is_empty() {
+                return Err(Error::InvalidNarrativeRoll(
+                    "narrative rolls do not support modifiers".to_string(),
+                ));
+            }
+            for pool in pools {
+                if pool.count == 0 {
+                    return Err(Error::InvalidNarrativeRoll(
+                        "narrative pool groups must roll at least one die".to_string(),
+                    ));
+                }
+            }
+            if !matches!(
+                annotation_rules,
+                [AnnotationRule::Triumph, AnnotationRule::Despair]
+            ) {
+                return Err(Error::InvalidNarrativeRoll(
+                    "narrative rolls must carry exactly the Triumph and Despair annotation rules"
+                        .to_string(),
+                ));
+            }
+            return Ok(());
+        }
+
+        if annotation_rules
+            .iter()
+            .any(|r| matches!(r, AnnotationRule::Triumph | AnnotationRule::Despair))
+        {
+            return Err(Error::InvalidNarrativeRoll(
+                "Triumph/Despair annotations are only supported on narrative rolls".to_string(),
+            ));
+        }
+        if pools.len() > 1 {
+            return Err(Error::InvalidNarrativeRoll(
+                "only narrative rolls may combine multiple pool groups".to_string(),
+            ));
+        }
+
+        Self::validate_marvel(&pools[0], modifiers, scoring, annotation_rules)
+    }
+
+    /// Enforce the Marvel Multiverse invariant for a single-pool plan.
+    ///
+    /// `MarvelMultiverse` scoring and a `MarvelD6` pool kind imply each other.
+    /// A Marvel plan rolls exactly 3 dice, carries only `Edge`/`Trouble`
+    /// modifiers, and carries exactly `[MarvelFantastic]`. A non-Marvel plan
+    /// rejects `Edge`/`Trouble` modifiers and the `MarvelFantastic` rule.
+    fn validate_marvel(
+        pool: &DicePool,
+        modifiers: &[RollModifier],
+        scoring: &ScoringMode,
+        annotation_rules: &[AnnotationRule],
+    ) -> Result<()> {
+        let marvel_scoring = matches!(scoring, ScoringMode::MarvelMultiverse);
+        let marvel_kind = pool.kind == DieKind::MarvelD6;
+
+        if marvel_scoring != marvel_kind {
+            return Err(Error::InvalidMarvelRoll(format!(
+                "MarvelMultiverse scoring and MarvelD6 pool kind must be used together \
+                 (scoring is MarvelMultiverse: {marvel_scoring}, kind is MarvelD6: {marvel_kind})"
+            )));
+        }
+
+        if marvel_scoring {
+            if pool.count != 3 {
+                return Err(Error::InvalidMarvelRoll(format!(
+                    "expected 3 dice, found {}",
+                    pool.count
+                )));
+            }
+            for modifier in modifiers {
+                if !matches!(
+                    modifier,
+                    RollModifier::Edge { .. } | RollModifier::Trouble { .. }
+                ) {
+                    return Err(Error::InvalidMarvelRoll(format!(
+                        "{modifier:?} is not supported on Marvel rolls; only Edge and Trouble"
+                    )));
+                }
+            }
+            if !matches!(annotation_rules, [AnnotationRule::MarvelFantastic]) {
+                return Err(Error::InvalidMarvelRoll(
+                    "Marvel rolls must carry exactly one MarvelFantastic annotation rule"
+                        .to_string(),
+                ));
+            }
+        } else {
+            for modifier in modifiers {
+                if matches!(
+                    modifier,
+                    RollModifier::Edge { .. } | RollModifier::Trouble { .. }
+                ) {
+                    return Err(Error::InvalidMarvelRoll(format!(
+                        "{modifier:?} is only supported on Marvel rolls"
+                    )));
+                }
+            }
+            if annotation_rules.contains(&AnnotationRule::MarvelFantastic) {
+                return Err(Error::InvalidMarvelRoll(
+                    "MarvelFantastic annotation is only supported on Marvel rolls".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Build a `RollPlan` without validating the Marvel Multiverse invariant.
@@ -914,6 +1006,123 @@ mod tests {
     #[test]
     fn new_narrative_rejects_empty_pool_list() {
         let result = RollPlan::new_narrative(vec![], vec![], ScoringMode::Sum, vec![]);
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    fn narrative_pool(count: u32, die: NarrativeDie) -> DicePool {
+        DicePool {
+            count,
+            kind: DieKind::Narrative(die),
+        }
+    }
+
+    fn narrative_rules() -> Vec<AnnotationRule> {
+        vec![AnnotationRule::Triumph, AnnotationRule::Despair]
+    }
+
+    #[test]
+    fn new_narrative_accepts_valid_plan() {
+        let result = RollPlan::new_narrative(
+            vec![
+                narrative_pool(2, NarrativeDie::Ability),
+                narrative_pool(1, NarrativeDie::Difficulty),
+            ],
+            vec![],
+            ScoringMode::SymbolCancel,
+            narrative_rules(),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_accepts_single_narrative_group() {
+        let result = RollPlan::new(
+            narrative_pool(1, NarrativeDie::Force),
+            vec![],
+            ScoringMode::SymbolCancel,
+            narrative_rules(),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_rejects_symbol_cancel_with_numeric_group() {
+        let result = RollPlan::new(
+            numeric_pool(),
+            vec![],
+            ScoringMode::SymbolCancel,
+            narrative_rules(),
+        );
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn new_narrative_rejects_non_symbol_cancel_scoring() {
+        let result = RollPlan::new_narrative(
+            vec![narrative_pool(1, NarrativeDie::Ability)],
+            vec![],
+            ScoringMode::Sum,
+            narrative_rules(),
+        );
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn new_narrative_rejects_modifiers() {
+        let result = RollPlan::new_narrative(
+            vec![narrative_pool(1, NarrativeDie::Ability)],
+            vec![RollModifier::KeepHighest(1)],
+            ScoringMode::SymbolCancel,
+            narrative_rules(),
+        );
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn new_narrative_rejects_zero_count_group() {
+        let result = RollPlan::new_narrative(
+            vec![narrative_pool(0, NarrativeDie::Ability)],
+            vec![],
+            ScoringMode::SymbolCancel,
+            narrative_rules(),
+        );
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn new_narrative_rejects_missing_annotation_rules() {
+        let result = RollPlan::new_narrative(
+            vec![narrative_pool(1, NarrativeDie::Ability)],
+            vec![],
+            ScoringMode::SymbolCancel,
+            vec![AnnotationRule::Triumph],
+        );
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn new_narrative_rejects_extra_annotation_rules() {
+        let result = RollPlan::new_narrative(
+            vec![narrative_pool(1, NarrativeDie::Ability)],
+            vec![],
+            ScoringMode::SymbolCancel,
+            vec![
+                AnnotationRule::Triumph,
+                AnnotationRule::Despair,
+                AnnotationRule::MarvelFantastic,
+            ],
+        );
+        assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
+    }
+
+    #[test]
+    fn new_rejects_numeric_plan_with_triumph_rule() {
+        let result = RollPlan::new(
+            numeric_pool(),
+            vec![],
+            ScoringMode::Sum,
+            vec![AnnotationRule::Triumph],
+        );
         assert!(matches!(result, Err(Error::InvalidNarrativeRoll(_))));
     }
 
