@@ -48,3 +48,4 @@ session-handoff.md
 .beads/proxieddb/
 .agents
 .codex
+.kata.local.toml
