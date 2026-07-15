@@ -165,6 +165,13 @@ mod tests {
     }
 
     #[test]
+    fn roll_rejects_zero_sided_numeric_dice_without_panicking() {
+        let result = std::panic::catch_unwind(|| roll("1d0"));
+        assert!(result.is_ok(), "rolling zero-sided dice must not panic");
+        assert!(matches!(result.unwrap(), Err(Error::InvalidDieKind(0))));
+    }
+
+    #[test]
     fn test_roll_with_modifier() {
         let result = roll("4d6kh3").unwrap();
         assert!(

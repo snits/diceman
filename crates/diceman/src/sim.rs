@@ -346,6 +346,13 @@ mod tests {
     }
 
     #[test]
+    fn simulate_rejects_zero_sided_numeric_dice_without_panicking() {
+        let result = std::panic::catch_unwind(|| simulate("1d0", 1));
+        assert!(result.is_ok(), "simulating zero-sided dice must not panic");
+        assert!(matches!(result.unwrap(), Err(Error::InvalidDieKind(0))));
+    }
+
+    #[test]
     fn test_simulate_constant() {
         let result = simulate("5", 100).unwrap();
 

@@ -247,6 +247,9 @@ impl<'a> Parser<'a> {
             Token::Number(n) => {
                 let n = *n;
                 self.advance()?;
+                if n == 0 {
+                    return Err(Error::InvalidDieKind(n));
+                }
                 Ok(DieKind::Number(n))
             }
             Token::Percent => {
@@ -766,6 +769,20 @@ mod tests {
                 vec![],
             ))
         );
+    }
+
+    #[test]
+    fn parse_rejects_zero_sided_numeric_dice() {
+        for notation in ["1d0", "2d0", "d0"] {
+            let err = parse(notation).unwrap_err();
+            assert!(matches!(err, Error::InvalidDieKind(0)), "{notation}");
+        }
+    }
+
+    #[test]
+    fn parse_preserves_other_zero_notation_behavior() {
+        assert!(matches!(parse("D0"), Err(Error::InvalidDigitDice(0))));
+        assert!(parse("0d6").is_ok());
     }
 
     #[test]

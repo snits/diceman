@@ -42,6 +42,7 @@ session-handoff.md
 .claude
 .worktrees
 .scratchpad
+.scratch/
 .mcp.json
 
 # Beads / Dolt files (added by bd init)

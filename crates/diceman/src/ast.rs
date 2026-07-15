@@ -130,6 +130,13 @@ impl RollPlan {
         scoring: &ScoringMode,
         annotation_rules: &[AnnotationRule],
     ) -> Result<()> {
+        if pools
+            .iter()
+            .any(|pool| matches!(pool.kind, DieKind::Number(0)))
+        {
+            return Err(Error::InvalidDieKind(0));
+        }
+
         let all_narrative = pools
             .iter()
             .all(|p| matches!(p.kind, DieKind::Narrative(_)));
@@ -1320,6 +1327,20 @@ mod tests {
             count: 1,
             kind: DieKind::Number(20),
         }
+    }
+
+    #[test]
+    fn new_rejects_zero_sided_numeric_die() {
+        let result = RollPlan::new(
+            DicePool {
+                count: 1,
+                kind: DieKind::Number(0),
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![],
+        );
+        assert!(matches!(result, Err(Error::InvalidDieKind(0))));
     }
 
     #[test]
