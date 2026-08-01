@@ -758,17 +758,11 @@ pub struct MarvelCheck {
 /// A pool-level annotation describing an interesting outcome (descriptive only).
 ///
 /// `Fantastic` and `AutoFail` are populated by Marvel Multiverse scoring
-/// (middle die showed M, or raw `1 / M / 1`). `CriticalSuccess` and
-/// `CriticalFailure` are reserved variants for pool-level crit surfacing;
-/// per-die crit rules currently surface via `DieResult::is_crit_success`
-/// and `DieResult::is_crit_failure`.
+/// (middle die showed M, or raw `1 / M / 1`). Per-die crit rules surface via
+/// `DieResult::is_crit_success` and `DieResult::is_crit_failure`, not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Annotation {
-    /// A die matched the critical-success condition.
-    CriticalSuccess,
-    /// A die matched the critical-failure condition.
-    CriticalFailure,
     /// The Marvel middle die showed M.
     Fantastic,
     /// The Marvel roll was raw `1 / M / 1` (auto-fail regardless of target).
