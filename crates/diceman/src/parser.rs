@@ -1191,6 +1191,46 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_success_count_lte() {
+        let expr = parse("5d10<=8").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
+                    count: 5,
+                    kind: DieKind::Number(10),
+                },
+                vec![],
+                ScoringMode::CountSuccesses(Condition {
+                    compare: Compare::LessOrEqual,
+                    value: 8,
+                }),
+                vec![],
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_success_count_ne() {
+        let expr = parse("6d6<>3").unwrap();
+        assert_eq!(
+            expr,
+            Expr::Roll(RollPlan::new_unchecked(
+                DicePool {
+                    count: 6,
+                    kind: DieKind::Number(6),
+                },
+                vec![],
+                ScoringMode::CountSuccesses(Condition {
+                    compare: Compare::NotEqual,
+                    value: 3,
+                }),
+                vec![],
+            ))
+        );
+    }
+
+    #[test]
     fn test_parse_marvel_roll() {
         let expr = parse("3dMarvel").unwrap();
         assert_eq!(

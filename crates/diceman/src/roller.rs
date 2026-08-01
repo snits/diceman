@@ -1500,6 +1500,48 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_count_successes_lte_boundary() {
+        // A roll exactly equal to the target must count for <=.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 6,
+                kind: DieKind::Number(6),
+            },
+            vec![],
+            ScoringMode::CountSuccesses(Condition {
+                compare: Compare::LessOrEqual,
+                value: 3,
+            }),
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![5, 6, 6, 4, 5, 3]); // only 3 <= 3 = 1 success
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Successes(1));
+    }
+
+    #[test]
+    fn test_evaluate_count_successes_ne_boundary() {
+        // A roll exactly equal to the target must NOT count for <>.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 6,
+                kind: DieKind::Number(6),
+            },
+            vec![],
+            ScoringMode::CountSuccesses(Condition {
+                compare: Compare::NotEqual,
+                value: 3,
+            }),
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![2, 1, 3, 3, 1, 1]); // four dice != 3 = 4 successes
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Successes(4));
+    }
+
+    #[test]
     fn test_evaluate_count_successes_output_format() {
         let plan = RollPlan::new_unchecked(
             DicePool {
