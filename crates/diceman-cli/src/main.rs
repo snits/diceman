@@ -183,6 +183,13 @@ fn main() {
                     }
                 }
                 Err(e) => {
+                    // Unreachable via any CLI invocation, not just untested: genesys_notation
+                    // (below) only ever emits well-formed narrative pool syntax for nonzero
+                    // counts, and nothing in the parse/validate/lex path enforces a count
+                    // ceiling that could reject it -- this holds only as long as that stays
+                    // true. If a dice-count limit is ever added anywhere in the crate, this
+                    // arm becomes reachable and needs a real CLI-level test (see
+                    // crates/diceman-cli/tests/cli.rs), not just this comment.
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }

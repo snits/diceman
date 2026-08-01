@@ -87,3 +87,83 @@ fn valid_roll_exits_0() {
     assert!(!output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
+
+// The remaining error arms below cover every `std::process::exit(1)` call
+// site in main.rs reachable through the public CLI, save one: the genesys
+// arm's `diceman::roll(&notation)` error path (see the comment at that call
+// site in main.rs for why it's unreachable, and the precondition that
+// keeps it that way). Each test asserts a stable fragment of the error
+// message, not just "some error fired" — otherwise a future change to
+// which arm rejects first (e.g. clap validation moving, or another error
+// path being added ahead of this one) could silently bind the test to the
+// wrong site while it keeps passing under its old name.
+
+#[test]
+fn invalid_sim_expression_exits_1() {
+    let output = diceman_cmd()
+        .args(["sim", "not-dice", "-n", "10"])
+        .output()
+        .expect("failed to run diceman binary");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("Error:"));
+    assert!(stderr.contains("Unexpected character"), "stderr: {stderr}");
+}
+
+#[test]
+fn genesys_with_no_dice_exits_1() {
+    let output = diceman_cmd()
+        .args(["genesys"])
+        .output()
+        .expect("failed to run diceman binary");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("Error:"));
+    assert!(stderr.contains("at least one die"), "stderr: {stderr}");
+}
+
+#[test]
+fn marvel_unknown_policy_exits_1() {
+    let output = diceman_cmd()
+        .args(["marvel", "--target", "8", "--policy", "bogus"])
+        .output()
+        .expect("failed to run diceman binary");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("Error:"));
+    assert!(stderr.contains("unknown policy"), "stderr: {stderr}");
+}
+
+#[test]
+fn marvel_sim_zero_trials_exits_1() {
+    let output = diceman_cmd()
+        .args(["marvel", "--target", "8", "--sim", "0"])
+        .output()
+        .expect("failed to run diceman binary");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("Error:"));
+    assert!(stderr.contains("trial count"), "stderr: {stderr}");
+}
+
+#[test]
+fn marvel_roll_edge_count_over_limit_exits_1() {
+    let output = diceman_cmd()
+        .args(["marvel", "--target", "8", "--edges", "200"])
+        .output()
+        .expect("failed to run diceman binary");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("Error:"));
+    assert!(stderr.contains("Reroll limit"), "stderr: {stderr}");
+}
