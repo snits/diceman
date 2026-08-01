@@ -2295,6 +2295,67 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_keep_highest_all() {
+        // Keeping more dice than were rolled must not panic (active_count - n
+        // would underflow without the n >= active_count guard). Keeping more
+        // than the pool keeps everything: no dice are dropped.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::KeepHighest(5)], // Keep more than rolled
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![3, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(7)); // All kept
+        assert_eq!(result.dice.iter().filter(|d| d.dropped).count(), 0);
+    }
+
+    #[test]
+    fn test_evaluate_drop_highest_all() {
+        // apply_drop_highest has no active_count guard: `indices.iter().take(n)`
+        // naturally caps at the active count, so this must not panic. Dropping
+        // more than the pool drops everything.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::DropHighest(5)], // Drop more than rolled
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![3, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(0)); // All dropped
+        assert_eq!(result.dice.iter().filter(|d| d.dropped).count(), 2);
+    }
+
+    #[test]
+    fn test_evaluate_drop_lowest_all() {
+        // Mirrors test_evaluate_drop_highest_all for apply_drop_lowest.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 2,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::DropLowest(5)], // Drop more than rolled
+            ScoringMode::Sum,
+            vec![],
+        );
+        let expr = Expr::Roll(plan);
+        let mut rng = TestRng::new(vec![3, 4]);
+        let result = evaluate_with_rng(&expr, &mut rng).unwrap();
+        assert_eq!(result.outcome, RollOutcome::Numeric(0)); // All dropped
+        assert_eq!(result.dice.iter().filter(|d| d.dropped).count(), 2);
+    }
+
+    #[test]
     fn test_evaluate_percent_dice() {
         let plan = RollPlan::new_unchecked(
             DicePool {
