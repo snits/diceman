@@ -52,6 +52,9 @@ pub enum Error {
 
     #[error("dice result is not numeric and cannot be used in arithmetic")]
     NonNumericOutcome,
+
+    #[error("simulation statistics overflowed accumulating trial totals")]
+    SimulationOverflow,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -189,6 +192,14 @@ mod tests {
         assert_eq!(
             Error::NonNumericOutcome.to_string(),
             "dice result is not numeric and cannot be used in arithmetic"
+        );
+    }
+
+    #[test]
+    fn simulation_overflow_display() {
+        assert_eq!(
+            Error::SimulationOverflow.to_string(),
+            "simulation statistics overflowed accumulating trial totals"
         );
     }
 }

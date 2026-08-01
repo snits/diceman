@@ -130,8 +130,7 @@ fn simulate_with_rng(expr: &str, n: usize, rng: &mut impl Rng) -> Result<SimResu
     for _ in 0..n {
         let total = evaluate_total(&parsed, rng)?;
         *distribution.entry(total).or_insert(0) += 1;
-        sum += total as i128;
-        sum_sq += (total as i128) * (total as i128);
+        accumulate_total(&mut sum, &mut sum_sq, total)?;
         min = min.min(total);
         max = max.max(total);
     }
@@ -143,6 +142,19 @@ fn validate_trial_count(n: usize) -> Result<()> {
     if n == 0 {
         return Err(Error::InvalidTrialCount(n));
     }
+    Ok(())
+}
+
+/// Add `total` and `total²` to the running sum/sum-of-squares accumulators.
+///
+/// Ordinary dice totals can't overflow i128 here, but pathological arithmetic
+/// expressions (large constant literals combined with `*`) can — surface that
+/// as an `Error` instead of panicking (debug) or wrapping (release).
+fn accumulate_total(sum: &mut i128, sum_sq: &mut i128, total: i64) -> Result<()> {
+    let total = total as i128;
+    let sq = total.checked_mul(total).ok_or(Error::SimulationOverflow)?;
+    *sum = sum.checked_add(total).ok_or(Error::SimulationOverflow)?;
+    *sum_sq = sum_sq.checked_add(sq).ok_or(Error::SimulationOverflow)?;
     Ok(())
 }
 
@@ -258,8 +270,7 @@ pub(crate) fn simulate_marvel_with_rng(
         if o.auto_fail {
             auto_fail_count += 1;
         }
-        sum += o.total as i128;
-        sum_sq += (o.total as i128) * (o.total as i128);
+        accumulate_total(&mut sum, &mut sum_sq, o.total)?;
         min = min.min(o.total);
         max = max.max(o.total);
         *distribution.entry(o.total).or_insert(0) += 1;
@@ -362,6 +373,20 @@ mod tests {
         assert_eq!(result.std_dev, 0.0);
         assert_eq!(result.distribution.len(), 1);
         assert_eq!(result.distribution[&5], 100);
+    }
+
+    #[test]
+    fn simulate_pathological_arithmetic_returns_overflow_error_instead_of_panicking() {
+        // 3_000_000_000 * 3_000_000_000 = 9e18 (fits i64). Its square, 8.1e37,
+        // summed over 3 trials reaches 2.43e38 > i128::MAX (~1.70e38). The
+        // accumulator must surface this as an Error, not panic (debug) or
+        // silently wrap (release).
+        let result = std::panic::catch_unwind(|| simulate("3000000000 * 3000000000", 3));
+        assert!(
+            result.is_ok(),
+            "pathological arithmetic overflow must not panic"
+        );
+        assert!(matches!(result.unwrap(), Err(Error::SimulationOverflow)));
     }
 
     #[test]
