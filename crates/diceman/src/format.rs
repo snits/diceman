@@ -462,6 +462,125 @@ mod tests {
         assert_eq!(result.expression, "4d6dh1[1, 5, 3, (6)] = 9");
     }
 
+    // The Explode tests below all use dice [1, 2, 3, 4] on a d6 pool: none
+    // equal the default explode condition (face == 6) and none exceed the
+    // explicit >4 condition used in explode_condition_renders_suffix, so no
+    // die actually explodes in any of them. This isolates modifiers_str's
+    // token rendering (what's under test here) from explosion mechanics.
+
+    #[test]
+    fn bare_explode_renders_bang() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: None,
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6![1, 2, 3, 4] = 10");
+    }
+
+    #[test]
+    fn compounding_explode_renders_double_bang() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: true,
+                penetrating: false,
+                limit: None,
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6!![1, 2, 3, 4] = 10");
+    }
+
+    #[test]
+    fn penetrating_explode_renders_p() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: true,
+                limit: None,
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6!p[1, 2, 3, 4] = 10");
+    }
+
+    #[test]
+    fn explode_limit_renders_digit() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: Some(3),
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6!3[1, 2, 3, 4] = 10");
+    }
+
+    #[test]
+    fn explode_condition_renders_suffix() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Explode {
+                compounding: false,
+                penetrating: false,
+                limit: None,
+                condition: Some(Condition {
+                    compare: Compare::GreaterThan,
+                    value: 4,
+                }),
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6!>4[1, 2, 3, 4] = 10");
+    }
+
     #[test]
     fn reroll_once_flag_renders_lowercase_o() {
         let plan = RollPlan::new_unchecked(
