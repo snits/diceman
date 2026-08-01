@@ -429,6 +429,40 @@ mod tests {
     }
 
     #[test]
+    fn keep_lowest_modifier_renders_lowercase_kl() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::KeepLowest(1)],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 5, 3, 6]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6kl1[1, (5), (3), (6)] = 1");
+    }
+
+    #[test]
+    fn drop_highest_modifier_renders_lowercase_dh() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::DropHighest(1)],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 5, 3, 6]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6dh1[1, 5, 3, (6)] = 9");
+    }
+
+    #[test]
     fn reroll_once_flag_renders_lowercase_o() {
         let plan = RollPlan::new_unchecked(
             DicePool {
