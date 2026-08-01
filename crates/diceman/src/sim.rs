@@ -401,6 +401,27 @@ mod tests {
     }
 
     #[test]
+    fn simulate_computes_correct_std_dev_for_1d6_exhaustive_enumeration() {
+        // Deterministic RNG feeds each 1d6 face exactly once (n=6), so this
+        // exercises the real sum/sum_sq accumulation in simulate_with_rng
+        // (not just finalize_sim_result) against a hand-checked, non-degenerate
+        // distribution: mean = 3.5, population std_dev = sqrt(35/12).
+        // A dropped sqrt (sim-02) or an unsquared sum_sq accumulator (sim-06)
+        // both leave a constant-distribution test green but fail this one.
+        let mut rng = TestRng::new(vec![1, 2, 3, 4, 5, 6]);
+        let result = simulate_with_rng("1d6", 6, &mut rng).unwrap();
+
+        assert_eq!(result.mean, 3.5);
+        let expected_std_dev: f64 = (35.0_f64 / 12.0).sqrt();
+        assert!(
+            (result.std_dev - expected_std_dev).abs() < 1e-9,
+            "std_dev={} expected≈{}",
+            result.std_dev,
+            expected_std_dev
+        );
+    }
+
+    #[test]
     fn test_simulate_seeded_reproducible() {
         let result1 = simulate_seeded("2d6", 1000, 42).unwrap();
         let result2 = simulate_seeded("2d6", 1000, 42).unwrap();
