@@ -496,6 +496,24 @@ mod tests {
     }
 
     #[test]
+    fn test_mismatched_keyword_char_error() {
+        // word()'s UnexpectedChar site: a keyword character ('m' for
+        // "marvel") followed by a character that doesn't continue any
+        // known keyword.
+        let mut lexer = Lexer::new("1dmX");
+        assert_eq!(lexer.next_token().unwrap(), Token::Number(1));
+        assert_eq!(lexer.next_token().unwrap(), Token::D);
+        let result = lexer.next_token();
+        assert!(result.is_err());
+        if let Err(Error::UnexpectedChar(ch, pos)) = result {
+            assert_eq!(ch, 'X');
+            assert_eq!(pos, 3);
+        } else {
+            panic!("Expected UnexpectedChar error for 'X' at position 3");
+        }
+    }
+
+    #[test]
     fn test_edge_token_case_insensitive() {
         for ch in ["e", "E"] {
             let mut lexer = Lexer::new(ch);

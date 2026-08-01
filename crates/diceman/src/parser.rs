@@ -507,6 +507,11 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 false
             }
+            // Unreachable via any parser input: drop_modifier() has exactly
+            // one caller (modifiers()), which peeks ahead and only calls
+            // this function when the next token is already H or L. If that
+            // guard ever changes, this arm needs a real test -- see
+            // crates/diceman/src/error.rs's test module for the pattern.
             _ => {
                 return Err(Error::Expected {
                     expected: "'h' or 'l' after 'd'".to_string(),
@@ -612,6 +617,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a required condition (>=8, <3, =5, etc.) for success counting.
+    ///
+    /// The `ok_or_else` below is unreachable via any parser input:
+    /// required_condition() has exactly one caller (modifiers()), which
+    /// only calls it when self.current is already Gt/Lt/Eq -- the same
+    /// guard optional_condition() checks before it could ever return
+    /// `Ok(None)`. If either guard changes, this needs a real test.
     fn required_condition(&mut self) -> Result<Condition> {
         self.optional_condition()?.ok_or_else(|| Error::Expected {
             expected: "comparison operator (>, <, =, >=, <=)".to_string(),
@@ -706,6 +717,10 @@ impl<'a> Parser<'a> {
     fn crit_condition(&mut self) -> Result<Condition> {
         // If we see a comparison operator, use optional_condition
         if matches!(self.current, Token::Gt | Token::Lt | Token::Eq) {
+            // The ok_or_else below is unreachable: optional_condition() can
+            // only return Ok(None) when self.current is none of Gt/Lt/Eq,
+            // but the guard above already ensures it's one of them here.
+            // If either guard changes, this needs a real test.
             self.optional_condition()?.ok_or_else(|| Error::Expected {
                 expected: "condition after critical marker".to_string(),
                 found: format!("{:?}", self.current),
@@ -1514,14 +1529,63 @@ mod tests {
 
     #[test]
     fn test_parse_crit_success_missing_value() {
+        // Exact message, not just the variant: this is crit_condition()'s
+        // final `else` branch (parser.rs), a distinct Error::Expected
+        // construction site from the one test_parse_expected_error_message
+        // below exercises. Mutating its expected/found payload was GREEN
+        // under a `matches!(err, Error::Expected { .. })` check.
         let err = parse("1d20cs").unwrap_err();
-        assert!(matches!(err, Error::Expected { .. }));
+        assert_eq!(
+            err.to_string(),
+            "Expected number or comparison after critical marker, found Eof"
+        );
     }
 
     #[test]
     fn test_parse_crit_failure_missing_value() {
         let err = parse("1d20cf").unwrap_err();
         assert!(matches!(err, Error::Expected { .. }));
+    }
+
+    #[test]
+    fn test_parse_expected_error_message() {
+        // The construction site (expected/found field payloads), not just
+        // the Expected variant's format string: mutating either field is
+        // GREEN with only a `matches!(err, Error::Expected { .. })` check.
+        // This is factor()'s Expected site.
+        let err = parse("1d20+").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Expected number, dice roll, or '(', found Eof"
+        );
+    }
+
+    #[test]
+    fn test_parse_unexpected_char_error_message() {
+        let err = parse("3dx").unwrap_err();
+        assert_eq!(err.to_string(), "Unexpected character 'x' at position 2");
+    }
+
+    #[test]
+    fn test_parse_digit_dice_missing_number_error_message() {
+        // digit_roll()'s Expected site -- distinct from kind()'s and
+        // factor()'s, and previously unasserted at either the variant or
+        // the message-content level.
+        let err = parse("D").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Expected number after 'D' for digit dice, found Eof"
+        );
+    }
+
+    #[test]
+    fn test_parse_comparison_missing_number_error_message() {
+        // finish_condition()'s Expected site.
+        let err = parse("1d20>").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Expected number after comparison, found Eof"
+        );
     }
 
     #[test]
@@ -1633,14 +1697,19 @@ mod tests {
 
     #[test]
     fn test_parse_missing_die_kind() {
+        // kind()'s Expected site.
         let err = parse("2d").unwrap_err();
-        assert!(matches!(err, Error::Expected { .. }));
+        assert_eq!(
+            err.to_string(),
+            "Expected dice sides (number, %, F, Marvel, or a narrative die name), found Eof"
+        );
     }
 
     #[test]
     fn test_parse_unclosed_parenthesis() {
+        // expect()'s Expected site.
         let err = parse("(2d6 + 3").unwrap_err();
-        assert!(matches!(err, Error::Expected { .. }));
+        assert_eq!(err.to_string(), "Expected RParen, found Eof");
     }
 
     #[test]
@@ -1657,8 +1726,9 @@ mod tests {
 
     #[test]
     fn test_parse_trailing_garbage_valid_token() {
+        // parse()'s top-level trailing-input Expected site.
         let err = parse("2d6 3").unwrap_err();
-        assert!(matches!(err, Error::Expected { .. }));
+        assert_eq!(err.to_string(), "Expected end of input, found Number(3)");
     }
 
     #[test]
