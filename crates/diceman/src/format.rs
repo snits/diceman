@@ -345,3 +345,189 @@ fn condition_marker_str(prefix: &str, c: &Condition) -> String {
         format!("{}{}{}", prefix, c.compare, c.value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{Expr, NarrativeDie};
+    use crate::roller::evaluate_with_rng;
+    use crate::test_support::TestRng;
+
+    // format.rs had zero tests despite 95.8% incidental region coverage --
+    // exercised only via roller/parser tests asserting on totals, not
+    // rendered text. Every assertion here pins the exact rendered string.
+
+    #[test]
+    fn display_impl_matches_expression() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        // fmt-23: the Display impl can write the empty string and nothing
+        // that only asserts on `.expression` would notice.
+        assert_eq!(result.to_string(), result.expression);
+        assert_eq!(result.to_string(), "4d6[1, 2, 3, 4] = 10");
+    }
+
+    #[test]
+    fn percent_die_renders_percent_symbol() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 1,
+                kind: DieKind::Percent,
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![42]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "1d%[42] = 42");
+    }
+
+    #[test]
+    fn fudge_die_renders_f_symbol() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Fudge,
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 2, 3, 2]); // -1, 0, 1, 0
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4dF[-1, 0, 1, 0] = 0");
+    }
+
+    #[test]
+    fn drop_lowest_modifier_renders_lowercase_dl() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::DropLowest(1)],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 5, 3, 6]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6dl1[(1), 5, 3, 6] = 14");
+    }
+
+    #[test]
+    fn reroll_once_flag_renders_lowercase_o() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![RollModifier::Reroll {
+                once: true,
+                condition: None,
+            }],
+            ScoringMode::Sum,
+            vec![],
+        );
+        let mut rng = TestRng::new(vec![1, 5, 3, 6]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6ro[1, 5, 3, 6] = 15");
+    }
+
+    #[test]
+    fn crit_success_condition_marker_omits_equal_operator() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![AnnotationRule::CriticalSuccess(Condition {
+                compare: Compare::Equal,
+                value: 6,
+            })],
+        );
+        let mut rng = TestRng::new(vec![1, 6, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        // fmt-18: condition_marker_str must render "cs6", not "cs=6".
+        assert_eq!(result.expression, "4d6cs6[1, 6**, 3, 4] = 14");
+    }
+
+    #[test]
+    fn crit_success_condition_marker_includes_non_equal_operator() {
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![AnnotationRule::CriticalSuccess(Condition {
+                compare: Compare::GreaterOrEqual,
+                value: 5,
+            })],
+        );
+        let mut rng = TestRng::new(vec![1, 6, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6cs>=5[1, 6**, 3, 4] = 14");
+    }
+
+    #[test]
+    fn crit_failure_marker_appears_in_notation() {
+        // fmt-25: crit_failure_str always returning None drops the cf
+        // marker from the echoed notation while the per-die `*` marker
+        // (already asserted elsewhere) stays intact.
+        let plan = RollPlan::new_unchecked(
+            DicePool {
+                count: 4,
+                kind: DieKind::Number(6),
+            },
+            vec![],
+            ScoringMode::Sum,
+            vec![AnnotationRule::CriticalFailure(Condition {
+                compare: Compare::Equal,
+                value: 1,
+            })],
+        );
+        let mut rng = TestRng::new(vec![1, 6, 3, 4]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "4d6cf1[1*, 6, 3, 4] = 14");
+    }
+
+    #[test]
+    fn narrative_light_label_is_lowercase() {
+        // fmt-21: `dark` is asserted elsewhere in the suite but `light`
+        // was not -- Force roll 8 renders a single Light pip.
+        let plan = RollPlan::new_unchecked_pools(
+            vec![DicePool {
+                count: 1,
+                kind: DieKind::Narrative(NarrativeDie::Force),
+            }],
+            vec![],
+            ScoringMode::SymbolCancel,
+            vec![AnnotationRule::Triumph, AnnotationRule::Despair],
+        );
+        let mut rng = TestRng::new(vec![8]);
+        let result = evaluate_with_rng(&Expr::Roll(plan), &mut rng).unwrap();
+
+        assert_eq!(result.expression, "1dForce[L] = 1 light");
+    }
+}
