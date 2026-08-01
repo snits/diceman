@@ -578,4 +578,90 @@ mod tests {
 
         assert!(err.contains("dice result is not numeric and cannot be used in arithmetic"));
     }
+
+    #[test]
+    fn sim_result_to_core_preserves_min_and_max_distinctly() {
+        // Distinct min/max values, asserted individually: a mutant that
+        // swaps them in to_core() must fail this, not just produce a
+        // plausible-looking result.
+        let sim = sim_result(core::SimResult {
+            distribution: HashMap::from([(2, 1), (9, 1)]),
+            min: 2,
+            max: 9,
+            mean: 5.5,
+            std_dev: 3.5,
+            n: 2,
+        });
+
+        let core_result = sim.to_core();
+        assert_eq!(core_result.min, 2);
+        assert_eq!(core_result.max, 9);
+        assert_eq!(core_result.mean, 5.5);
+        assert_eq!(core_result.std_dev, 3.5);
+        assert_eq!(core_result.n, 2);
+        assert_eq!(core_result.distribution, HashMap::from([(2, 1), (9, 1)]));
+    }
+
+    #[test]
+    fn sim_result_mode_returns_most_common_outcome() {
+        let sim = sim_result(core::SimResult {
+            distribution: HashMap::from([(1, 1), (2, 1), (3, 3)]),
+            min: 1,
+            max: 3,
+            mean: 2.4,
+            std_dev: 0.8,
+            n: 5,
+        });
+
+        assert_eq!(sim.mode(), Some(3));
+    }
+
+    #[test]
+    fn sim_result_sorted_outcomes_orders_by_value() {
+        let sim = sim_result(core::SimResult {
+            distribution: HashMap::from([(3, 3), (1, 1), (2, 1)]),
+            min: 1,
+            max: 3,
+            mean: 2.4,
+            std_dev: 0.8,
+            n: 5,
+        });
+
+        assert_eq!(sim.sorted_outcomes(), vec![(1, 1), (2, 1), (3, 3)]);
+    }
+
+    #[test]
+    fn sim_result_probabilities_computes_fractions() {
+        let sim = sim_result(core::SimResult {
+            distribution: HashMap::from([(1, 1), (2, 1), (3, 3)]),
+            min: 1,
+            max: 3,
+            mean: 2.4,
+            std_dev: 0.8,
+            n: 5,
+        });
+
+        let probs = sim.probabilities();
+        assert_eq!(probs.len(), 3);
+        assert_eq!(probs[&1], 0.2);
+        assert_eq!(probs[&2], 0.2);
+        assert_eq!(probs[&3], 0.6);
+    }
+
+    #[test]
+    fn sim_result_repr_matches_format() {
+        let sim = sim_result(core::SimResult {
+            distribution: HashMap::from([(1, 1), (6, 3)]),
+            min: 1,
+            max: 6,
+            mean: 3.5,
+            std_dev: 1.29,
+            n: 4,
+        });
+
+        assert_eq!(
+            sim.__repr__(),
+            "SimResult(n=4, mean=3.50, std_dev=1.29, min=1, max=6)"
+        );
+    }
 }
